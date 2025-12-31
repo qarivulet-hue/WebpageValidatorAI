@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE suite SYSTEM "https://testng.org/testng-1.0.dtd">
+<suite name="WebpageValidatorAI Test Suite" verbose="1" parallel="false">
+    
+    <listeners>
+        <!-- Add custom listeners here if needed -->
+    </listeners>
+    
+    <test name="StyleGuide Validator QA Tests" preserve-order="true">
+        <classes>
+            <class name="Cursor_in_Details.StyleGuide_ValidatorQA">
+                <!-- 
+                    Test methods will be executed in priority order:
+                    - testQAAuditForAllResolutions (priority=1, enabled=true)
+                    - testQAAuditForDefaultResolution (priority=2, enabled=false)
+                -->
+            </class>
+        </classes>
+    </test>
+    
+    <!-- 
+    Additional test configurations can be added here:
+    
+    <test name="Other Tests">
+        <classes>
+            <class name="package.ClassName"/>
+        </classes>
+    </test>
+    -->
+    
+</suite>
+
+
+
+
+
+
+
+
