@@ -48,7 +48,7 @@ public class StyleGuide_ValidatorQA {
 	// Test URL - Change this URL to test different websites
 	// Based on this URL, reports will be generated for the resolutions you have
 	// enabled in SCREEN_SIZES
-	private static final String TEST_URL = "https://amiwebprod.wpenginepowered.com/";
+	private static final String TEST_URL = "https://amiwebprod.wpenginepowered.com/qa-demo/";
 
 	// Screen size definitions
 	// To disable a screen size, simply comment out its line below
@@ -94,26 +94,154 @@ public class StyleGuide_ValidatorQA {
 		FONT_WEIGHT_NAMES.put("700", "Bold");
 		FONT_WEIGHT_NAMES.put("800", "Extra Bold");
 		FONT_WEIGHT_NAMES.put("900", "Extra Bold");
+		
+		// Suppress warnings immediately when class loads (before TestNG initializes)
+		suppressAllWarnings();
+	}
+	
+	/**
+	 * Suppress all console warnings - called in static initializer to run before TestNG
+	 */
+	private static void suppressAllWarnings() {
+		// Suppress Unsafe warnings by filtering stderr immediately
+		final java.io.PrintStream originalErr = System.err;
+		final java.io.PrintStream originalOut = System.out;
+		
+		// Filter stderr for Unsafe warnings
+		System.setErr(new java.io.PrintStream(new java.io.ByteArrayOutputStream()) {
+			@Override
+			public void println(String x) {
+				if (x != null && (x.contains("sun.misc.Unsafe") || x.contains("terminally deprecated") 
+						|| x.contains("objectFieldOffset") || x.contains("WARNING: A terminally"))) {
+					return;
+				}
+				originalErr.println(x);
+			}
+			
+			@Override
+			public void print(String x) {
+				if (x != null && (x.contains("sun.misc.Unsafe") || x.contains("terminally deprecated") 
+						|| x.contains("objectFieldOffset") || x.contains("WARNING: A terminally"))) {
+					return;
+				}
+				originalErr.print(x);
+			}
+			
+			@Override
+			public void println(Object x) {
+				if (x != null) {
+					println(x.toString());
+				} else {
+					originalErr.println(x);
+				}
+			}
+		});
+		
+		// Filter stdout for TestNG and WebDriverManager INFO messages
+		System.setOut(new java.io.PrintStream(new java.io.ByteArrayOutputStream()) {
+			@Override
+			public void println(String x) {
+				if (x != null && (x.contains("[Utils] MethodGroupsHelper") 
+						|| x.contains("[Utils] DynamicGraphHelper")
+						|| x.contains("[TestNG]")
+						|| x.contains("io.github.bonigarcia.wdm.WebDriverManager")
+						|| x.contains("Using chromedriver")
+						|| x.contains("Exporting webdriver.chrome.driver")
+						|| x.contains("Detected a static method"))) {
+					return; // Suppress these messages
+				}
+				originalOut.println(x);
+			}
+			
+			@Override
+			public void print(String x) {
+				if (x != null && (x.contains("[Utils] MethodGroupsHelper") 
+						|| x.contains("[Utils] DynamicGraphHelper")
+						|| x.contains("[TestNG]")
+						|| x.contains("io.github.bonigarcia.wdm.WebDriverManager")
+						|| x.contains("Using chromedriver")
+						|| x.contains("Exporting webdriver.chrome.driver")
+						|| x.contains("Detected a static method"))) {
+					return;
+				}
+				originalOut.print(x);
+			}
+			
+			@Override
+			public void println(Object x) {
+				if (x != null) {
+					println(x.toString());
+				} else {
+					originalOut.println(x);
+				}
+			}
+		});
+		
+		// Suppress logging immediately
+		LogManager.getLogManager().reset();
+		Logger globalLogger = Logger.getLogger(Logger.GLOBAL_LOGGER_NAME);
+		globalLogger.setLevel(Level.OFF);
+		
+		// Suppress TestNG logging
+		Logger testngLogger = Logger.getLogger("org.testng");
+		testngLogger.setLevel(Level.OFF);
+		
+		// Suppress WebDriverManager logging
+		Logger webDriverManagerLogger = Logger.getLogger("io.github.bonigarcia.wdm");
+		webDriverManagerLogger.setLevel(Level.OFF);
+		
+		// Suppress Selenium logging
+		Logger seleniumLogger = Logger.getLogger("org.openqa.selenium");
+		seleniumLogger.setLevel(Level.OFF);
+		
+		// Suppress Netty logging
+		Logger nettyLogger = Logger.getLogger("io.netty");
+		nettyLogger.setLevel(Level.OFF);
+		
+		// Suppress root logger
+		Logger rootLogger = Logger.getLogger("");
+		rootLogger.setLevel(Level.OFF);
+		
+		// Remove all handlers and add a silent one
+		for (Handler h : Logger.getLogger("").getHandlers()) {
+			Logger.getLogger("").removeHandler(h);
+		}
 	}
 
 	public static void muteLogs() {
+		// Set all loggers to OFF to completely suppress messages
 		LogManager.getLogManager().reset();
+		
 		Logger globalLogger = Logger.getLogger(Logger.GLOBAL_LOGGER_NAME);
-		globalLogger.setLevel(Level.INFO);
+		globalLogger.setLevel(Level.OFF);
 
+		// Suppress Selenium logging
 		Logger seleniumLogger = Logger.getLogger("org.openqa.selenium");
-		seleniumLogger.setLevel(Level.INFO);
+		seleniumLogger.setLevel(Level.OFF);
 
+		// Suppress Netty logging (for Unsafe warnings)
 		Logger nettyLogger = Logger.getLogger("io.netty");
-		nettyLogger.setLevel(Level.INFO);
+		nettyLogger.setLevel(Level.OFF);
 
+		// Suppress AsyncHttpClient logging
 		Logger asyncHttpLogger = Logger.getLogger("org.asynchttpclient");
-		asyncHttpLogger.setLevel(Level.INFO);
+		asyncHttpLogger.setLevel(Level.OFF);
 
+		// Suppress WebDriverManager INFO messages
+		Logger webDriverManagerLogger = Logger.getLogger("io.github.bonigarcia.wdm");
+		webDriverManagerLogger.setLevel(Level.OFF);
+
+		// Suppress TestNG INFO messages
+		Logger testngLogger = Logger.getLogger("org.testng");
+		testngLogger.setLevel(Level.OFF);
+
+		// Suppress all other verbose loggers
+		Logger rootLogger = Logger.getLogger("");
+		rootLogger.setLevel(Level.OFF);
+
+		// Remove all console handlers
 		for (Handler h : Logger.getLogger("").getHandlers()) {
-			if (h instanceof ConsoleHandler) {
-				h.setLevel(Level.INFO);
-			}
+			Logger.getLogger("").removeHandler(h);
 		}
 	}
 
@@ -140,12 +268,18 @@ public class StyleGuide_ValidatorQA {
 
 	public void runQAAudit(String url, ScreenSize screenSize) throws Exception {
 		if (driver == null) {
+			// Ensure WebDriverManager logging is suppressed (already done in static init, but ensure it's still off)
+			Logger wdmLogger = Logger.getLogger("io.github.bonigarcia.wdm");
+			wdmLogger.setLevel(Level.OFF);
 			WebDriverManager.chromedriver().setup();
 			ChromeOptions options = new ChromeOptions();
 			options.addArguments("--disable-dev-shm-usage");
 			options.addArguments("--disable-gpu");
 			options.addArguments("--remote-allow-origins=*");
 			options.addArguments("--headless=new");
+			// Suppress ChromeDriver startup messages
+			options.addArguments("--log-level=3"); // Only fatal errors
+			options.addArguments("--silent");
 			driver = new ChromeDriver(options);
 			wait = new WebDriverWait(driver, Duration.ofSeconds(20));
 		}
@@ -1335,40 +1469,74 @@ public class StyleGuide_ValidatorQA {
 	private List<OtherElement> extractOtherElements(WebDriver driver) {
 		List<OtherElement> otherElements = new ArrayList<>();
 
-		// Extract Images
+		// Extract Images - capture all images including JPG, PNG, SVG, WebP, GIF
 		try {
 			List<WebElement> images = driver.findElements(By.tagName("img"));
+			Set<String> processedSrcs = new HashSet<>(); // Track processed images to avoid duplicates
 			for (WebElement img : images) {
-				if (img.isDisplayed()) {
-					String src = img.getAttribute("src") != null ? img.getAttribute("src") : "Not available";
+				try {
+					// Check if element exists and get src attribute
+					String src = img.getAttribute("src");
+					if (src == null || src.isEmpty() || src.equals("Not available")) {
+						// Try data-src for lazy-loaded images
+						src = img.getAttribute("data-src");
+						if (src == null || src.isEmpty()) {
+							// Try srcset as fallback
+							String srcset = img.getAttribute("srcset");
+							if (srcset != null && !srcset.isEmpty()) {
+								// Extract first URL from srcset
+								String[] srcsetParts = srcset.split(",");
+								if (srcsetParts.length > 0) {
+									src = srcsetParts[0].trim().split("\\s+")[0];
+								}
+							}
+						}
+					}
+					
+					// Skip if no valid src found or already processed
+					if (src == null || src.isEmpty() || processedSrcs.contains(src)) {
+						continue;
+					}
+					
+					// Accept all images - if it's in an <img> tag, it's likely an image
+					// Support all image types: JPG, PNG, SVG, WebP, GIF, and any other image format
+					// Also accept data URIs, relative paths, and absolute URLs
+					
+					processedSrcs.add(src);
+					
 					String alt = img.getAttribute("alt") != null ? img.getAttribute("alt") : "Not available";
 					String title = img.getAttribute("title") != null ? img.getAttribute("title") : "Not available";
 					String width = img.getAttribute("width") != null ? img.getAttribute("width") : "Not available";
 					String height = img.getAttribute("height") != null ? img.getAttribute("height") : "Not available";
-					otherElements.add(new OtherElement("img", alt.isEmpty() ? src : alt, src, alt, title, width, height,
-							"", "", ""));
+					
+					// If width/height not in attributes, try to get computed size
+					if (width.equals("Not available") || height.equals("Not available")) {
+						try {
+							Dimension size = img.getSize();
+							if (width.equals("Not available") && size.getWidth() > 0) {
+								width = String.valueOf(size.getWidth());
+							}
+							if (height.equals("Not available") && size.getHeight() > 0) {
+								height = String.valueOf(size.getHeight());
+							}
+						} catch (Exception ex) {
+							// Ignore if can't get size
+						}
+					}
+					
+					otherElements.add(new OtherElement("img", alt.isEmpty() || alt.equals("Not available") ? src : alt, 
+							src, alt, title, width, height, "", "", ""));
+				} catch (StaleElementReferenceException e) {
+					// Element became stale, skip it
+					continue;
+				} catch (Exception e) {
+					// Log but continue processing other images
+					LOGGER.fine("Error processing individual image: " + e.getMessage());
+					continue;
 				}
 			}
 		} catch (Exception e) {
 			LOGGER.warning("Error extracting images: " + e.getMessage());
-		}
-
-		// Extract Lists (ul, ol, li)
-		try {
-			List<WebElement> lists = driver.findElements(By.xpath("//ul | //ol"));
-			for (WebElement list : lists) {
-				if (list.isDisplayed() && !list.findElements(By.tagName("li")).isEmpty()) {
-					String tagName = list.getTagName();
-					String text = list.getText();
-					if (text != null && !text.trim().isEmpty()) {
-						int itemCount = list.findElements(By.tagName("li")).size();
-						otherElements.add(new OtherElement(tagName, text.substring(0, Math.min(100, text.length())), "",
-								"", "", "", "", String.valueOf(itemCount), "", ""));
-					}
-				}
-			}
-		} catch (Exception e) {
-			LOGGER.warning("Error extracting lists: " + e.getMessage());
 		}
 
 		// Extract Tables
@@ -1468,9 +1636,9 @@ public class StyleGuide_ValidatorQA {
 			LOGGER.warning("Error extracting selects: " + e.getMessage());
 		}
 
-		// Extract Semantic Elements (section, article, aside, nav, header, footer,
-		// main)
-		String[] semanticTags = { "section", "article", "aside", "nav", "header", "footer", "main" };
+		// Extract Semantic Elements (article, aside, main)
+		// Note: section, header, footer, nav are excluded as per requirements
+		String[] semanticTags = { "article", "aside", "main" };
 		for (String tag : semanticTags) {
 			try {
 				List<WebElement> elements = driver.findElements(By.tagName(tag));
@@ -1545,23 +1713,6 @@ public class StyleGuide_ValidatorQA {
 			}
 		} catch (Exception e) {
 			LOGGER.warning("Error extracting labels: " + e.getMessage());
-		}
-
-		// Extract SVG elements
-		try {
-			List<WebElement> svgs = driver.findElements(By.tagName("svg"));
-			for (WebElement svg : svgs) {
-				if (svg.isDisplayed()) {
-					String width = svg.getAttribute("width") != null ? svg.getAttribute("width") : "Not available";
-					String height = svg.getAttribute("height") != null ? svg.getAttribute("height") : "Not available";
-					String viewBox = svg.getAttribute("viewBox") != null ? svg.getAttribute("viewBox")
-							: "Not available";
-					otherElements
-							.add(new OtherElement("svg", "SVG Element", width, height, viewBox, "", "", "", "", ""));
-				}
-			}
-		} catch (Exception e) {
-			LOGGER.warning("Error extracting SVG elements: " + e.getMessage());
 		}
 
 		// Extract Details/Summary
@@ -2709,6 +2860,17 @@ public class StyleGuide_ValidatorQA {
 										el.text.length() > 200 ? el.text.substring(0, 200) + "..." : el.text))
 								.append("</div>\n");
 					}
+					// Add image preview for img elements
+					if (el.tagName.equals("img") && !el.attr1.isEmpty() && !el.attr1.equals("Not available")) {
+						String altText = (!el.attr2.isEmpty() && !el.attr2.equals("Not available")) 
+								? escapeHtml(el.attr2) : "Image preview";
+						sb.append("<div class=\"image-preview-container\">\n");
+						sb.append("<img src=\"").append(escapeHtml(el.attr1))
+								.append("\" alt=\"").append(altText)
+								.append("\" class=\"image-preview\" onerror=\"this.style.display='none'; this.nextElementSibling.style.display='block';\" />\n");
+						sb.append("<div class=\"image-preview-error\" style=\"display: none; padding: 16px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-secondary); text-align: center; font-size: 14px;\">Image could not be loaded</div>\n");
+						sb.append("</div>\n");
+					}
 					sb.append("<div class=\"details\">\n");
 					sb.append("<div><strong>Tag:</strong> <span>").append(escapeHtml(el.tagName))
 							.append("</span></div>\n");
@@ -3344,6 +3506,10 @@ public class StyleGuide_ValidatorQA {
 		sb.append(".paragraph-card .details div span { color: var(--text-primary); font-size: 14px; }\n");
 		sb.append(
 				".paragraph-card .heading-text-display { font-size: 16px; font-weight: 600; color: var(--accent-primary); margin-bottom: 16px; padding: 14px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; word-break: break-word; }\n");
+		sb.append(
+				".image-preview-container { margin-bottom: 20px; text-align: center; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; width: 100%; height: 300px; display: flex; align-items: center; justify-content: center; overflow: hidden; box-sizing: border-box; }\n");
+		sb.append(
+				".image-preview { max-width: 100%; max-height: 100%; width: auto; height: auto; border-radius: 6px; box-shadow: var(--shadow-sm); object-fit: contain; }\n");
 		sb.append(
 				".paragraph-card .url-box { width: 100%; margin-top: 16px; padding: 16px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; }\n");
 		sb.append(
@@ -4238,8 +4404,9 @@ public class StyleGuide_ValidatorQA {
 	 */
 	@BeforeSuite(alwaysRun = true)
 	public static void setUpSuite() {
+		// Logging is already suppressed in static initializer
+		// Just ensure it's still active
 		muteLogs();
-		LOGGER.info("TestNG Suite Setup: Logging configuration initialized");
 	}
 
 	/**
