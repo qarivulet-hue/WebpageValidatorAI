@@ -3318,6 +3318,7 @@ public class StyleGuide_ValidatorQA {
 		sb.append(
 				"summary::after { content: \"▼\"; position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--accent-primary); }\n");
 		sb.append("details[open] summary::after { transform: translateY(-50%) rotate(180deg); }\n");
+		sb.append("details > div { margin-top: 16px; }\n");
 		sb.append(".element-row { display: flex; gap: 24px; margin-top: 20px; flex-wrap: wrap; }\n");
 		sb.append(".element-row > div { flex: 1; min-width: 180px; max-width: 100%; margin-bottom: 12px; overflow-wrap: break-word; word-break: break-word; }\n");
 		sb.append(
@@ -3342,7 +3343,7 @@ public class StyleGuide_ValidatorQA {
 				".paragraph-card .details div strong { display: block; margin-bottom: 8px; color: var(--accent-primary); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }\n");
 		sb.append(".paragraph-card .details div span { color: var(--text-primary); font-size: 14px; }\n");
 		sb.append(
-				".paragraph-card .heading-text-display { font-size: 18px; font-weight: 600; color: var(--accent-primary); margin-bottom: 16px; padding: 14px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; word-break: break-word; }\n");
+				".paragraph-card .heading-text-display { font-size: 16px; font-weight: 600; color: var(--accent-primary); margin-bottom: 16px; padding: 14px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; word-break: break-word; }\n");
 		sb.append(
 				".paragraph-card .url-box { width: 100%; margin-top: 16px; padding: 16px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; }\n");
 		sb.append(
