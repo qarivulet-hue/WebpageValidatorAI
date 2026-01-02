@@ -2,6 +2,7 @@ package Cursor_in_Details;
 
 import org.languagetool.JLanguageTool;
 import org.languagetool.language.AmericanEnglish;
+import org.languagetool.rules.Rule;
 import org.languagetool.rules.RuleMatch;
 import org.openqa.selenium.*;
 import org.openqa.selenium.NoSuchElementException;
@@ -35,6 +36,7 @@ import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.Base64;
 import org.openqa.selenium.TakesScreenshot;
+import org.openqa.selenium.interactions.Actions;
 
 public class StyleGuide_ValidatorQA {
 
@@ -48,7 +50,7 @@ public class StyleGuide_ValidatorQA {
 	// Test URL - Change this URL to test different websites
 	// Based on this URL, reports will be generated for the resolutions you have
 	// enabled in SCREEN_SIZES
-	private static final String TEST_URL = "https://amiwebprod.wpenginepowered.com/qa-demo/";
+	private static final String TEST_URL = "https://whitelabeliq.com/about/";
 
 	// Screen size definitions
 	// To disable a screen size, simply comment out its line below
@@ -56,11 +58,11 @@ public class StyleGuide_ValidatorQA {
 	// RESOLUTIONS_WITHOUT_SEO if it exists there
 	private static final List<ScreenSize> SCREEN_SIZES = new ArrayList<ScreenSize>() {
 		{
-			add(new ScreenSize("1920 × 1080", 1920, 1080, "Most popular desktop resolution"));
+		add(new ScreenSize("1920 × 1080", 1920, 1080, "Most popular desktop resolution"));
 //        add(new ScreenSize("1440 × 900", 1440, 900, "Common medium-size screens"));
 //        add(new ScreenSize("1366 × 768", 1366, 768, "Very common on budget laptops"));
 //        add(new ScreenSize("1024 × 768", 1024, 768, "Standard iPad landscape"));
-//		  add(new ScreenSize("768 × 1024", 768, 1024, "Standard iPad portrait"));
+//		add(new ScreenSize("768 × 1024", 768, 1024, "Standard iPad portrait"));
 //        add(new ScreenSize("414 × 896", 414, 896, "Large iPhones"));
 //        add(new ScreenSize("360 × 800", 360, 800, "Most Android devices"));
 //        add(new ScreenSize("340 × 720", 340, 720, "Low-end or small Android screens"));
@@ -94,6 +96,15 @@ public class StyleGuide_ValidatorQA {
 		FONT_WEIGHT_NAMES.put("700", "Bold");
 		FONT_WEIGHT_NAMES.put("800", "Extra Bold");
 		FONT_WEIGHT_NAMES.put("900", "Extra Bold");
+		
+		// Configure XML parser limits to allow LanguageTool to parse grammar.xml
+		// The default limit of 100,000 bytes is too low for LanguageTool's grammar.xml (100,035 bytes)
+		// Setting to -1 (unlimited) or a high value to prevent SAXParseException
+		System.setProperty("jdk.xml.totalEntitySizeLimit", "-1");
+		System.setProperty("jdk.xml.entityExpansionLimit", "-1");
+		System.setProperty("jdk.xml.maxElementDepth", "10000");
+		System.setProperty("jdk.xml.maxGeneralEntitySizeLimit", "-1");
+		System.setProperty("jdk.xml.maxParameterEntitySizeLimit", "-1");
 		
 		// Suppress warnings immediately when class loads (before TestNG initializes)
 		suppressAllWarnings();
@@ -381,97 +392,91 @@ public class StyleGuide_ValidatorQA {
 			LOGGER.warning("Error retrieving paragraphs for URL: " + url + ". Error: " + e.getMessage());
 		}
 
-		// Comprehensive text extraction for grammar checking
-		List<String> allTextContent = new ArrayList<>();
-
-		// Extract text from paragraphs
-		try {
-			List<WebElement> paragraphElements = driver.findElements(By.tagName("p"));
-			for (WebElement para : paragraphElements) {
-				String text = para.getText();
-				if (text != null && !text.trim().isEmpty()) {
-					allTextContent.add("PARAGRAPH: " + text.trim());
-				}
-			}
-		} catch (Exception e) {
-			LOGGER.warning("Error extracting paragraph text: " + e.getMessage());
+		// Step 1: Main content extraction (Readability-based)
+		String mainContent = extractMainContent(driver);
+		LOGGER.info("Extracted main content: " + mainContent.length() + " characters");
+		
+		// Step 2: Text cleanup + Lorem detection
+		mainContent = cleanupText(mainContent);
+		if (isLoremIpsum(mainContent)) {
+			LOGGER.warning("Detected Lorem Ipsum placeholder text - skipping spelling check");
+			mainContent = ""; // Skip Lorem Ipsum content
 		}
-
-		// Extract text from headings
-		try {
-			for (int i = 1; i <= 6; i++) {
-				List<WebElement> headings = driver.findElements(By.tagName("h" + i));
-				for (WebElement heading : headings) {
-					String text = heading.getText();
-					if (text != null && !text.trim().isEmpty()) {
-						allTextContent.add("HEADING H" + i + ": " + text.trim());
-					}
-				}
-			}
-		} catch (Exception e) {
-			LOGGER.warning("Error extracting heading text: " + e.getMessage());
-		}
-
-		// Extract text from buttons and links
-		try {
-			List<WebElement> buttonElements = driver.findElements(By.tagName("button"));
-			for (WebElement button : buttonElements) {
-				String text = button.getText();
-				if (text != null && !text.trim().isEmpty() && !text.contains("Icon")) {
-					allTextContent.add("BUTTON: " + text.trim());
-				}
-			}
-
-			List<WebElement> linkElements = driver.findElements(By.tagName("a"));
-			for (WebElement link : linkElements) {
-				String text = link.getText();
-				if (text != null && !text.trim().isEmpty()) {
-					allTextContent.add("LINK: " + text.trim());
-				}
-			}
-		} catch (Exception e) {
-			LOGGER.warning("Error extracting button/link text: " + e.getMessage());
-		}
-
-		// Extract text from other common text elements
-		try {
-			String[] textElements = { "span", "div", "label", "li", "td", "th" };
-			for (String tag : textElements) {
-				List<WebElement> elements = driver.findElements(By.tagName(tag));
-				for (WebElement element : elements) {
-					String text = element.getText();
-					if (text != null && !text.trim().isEmpty() && text.length() > 3) {
-						allTextContent.add(tag.toUpperCase() + ": " + text.trim());
-					}
-				}
-			}
-		} catch (Exception e) {
-			LOGGER.warning("Error extracting other text elements: " + e.getMessage());
-		}
-
-		// Extract meta description for grammar checking
+		
+		// Also extract meta description and title (important for SEO)
+		String metaDescText = "";
+		String titleText = "";
 		try {
 			WebElement metaDesc = driver.findElement(By.xpath("//meta[@name='description']"));
-			String metaText = metaDesc.getAttribute("content");
-			if (metaText != null && !metaText.trim().isEmpty()) {
-				allTextContent.add("META DESCRIPTION: " + metaText.trim());
+			String metaContent = metaDesc.getAttribute("content");
+			if (metaContent != null && !metaContent.trim().isEmpty()) {
+				metaDescText = cleanupText(metaContent.trim());
 			}
 		} catch (Exception e) {
-			LOGGER.warning("Error extracting meta description: " + e.getMessage());
+			LOGGER.fine("Meta description not found");
 		}
 
-		// Extract page title for grammar checking
 		try {
-			String titleText = driver.getTitle();
-			if (titleText != null && !titleText.trim().isEmpty()) {
-				allTextContent.add("PAGE TITLE: " + titleText.trim());
+			String pageTitleValue = driver.getTitle();
+			if (pageTitleValue != null && !pageTitleValue.trim().isEmpty()) {
+				titleText = cleanupText(pageTitleValue.trim());
 			}
 		} catch (Exception e) {
-			LOGGER.warning("Error extracting page title: " + e.getMessage());
+			LOGGER.fine("Page title not found");
 		}
-
-		LOGGER.info("Extracted " + allTextContent.size() + " text elements for spelling checking");
-		List<GrammarIssue> grammarIssues = parallelGrammarCheck(allTextContent);
+		
+		// Step 3: Chunk text (800-2000 chars per chunk)
+		List<String> textChunks = new ArrayList<>();
+		if (!mainContent.isEmpty()) {
+			textChunks.addAll(chunkText(mainContent, 800, 2000));
+		}
+		if (!metaDescText.isEmpty()) {
+			textChunks.add(metaDescText);
+		}
+		if (!titleText.isEmpty()) {
+			textChunks.add(titleText);
+		}
+		
+		// Also add individual paragraph texts to ensure all displayed content is checked
+		// This ensures paragraphs shown in the report are also spell-checked
+		for (ParagraphStyle para : paragraphs) {
+			if (para != null && para.text != null && !para.text.trim().isEmpty() 
+					&& !para.text.equals("Not available") && para.text.trim().length() > 10) {
+				String paraText = cleanupText(para.text.trim());
+				if (!paraText.isEmpty() && !textChunks.contains(paraText)) {
+					// Only add if it's not already included in mainContent
+					// Check if this paragraph text is already in mainContent
+					boolean alreadyIncluded = false;
+					if (!mainContent.isEmpty() && mainContent.contains(para.text.substring(0, Math.min(50, para.text.length())))) {
+						alreadyIncluded = true;
+					}
+					if (!alreadyIncluded) {
+						textChunks.add(paraText);
+						LOGGER.fine("Added paragraph text to spelling check: " + paraText.substring(0, Math.min(50, paraText.length())) + "...");
+					}
+				}
+			}
+		}
+		
+		LOGGER.info("Created " + textChunks.size() + " text chunks for spelling checking");
+		if (textChunks.isEmpty()) {
+			LOGGER.warning("WARNING: No text content available for spelling checking!");
+		}
+		
+		// Step 4-7: Run spelling check with new logic
+		List<GrammarIssue> grammarIssues = parallelGrammarCheck(textChunks);
+		LOGGER.info("Spelling check completed. Found " + grammarIssues.size() + " spelling error(s)");
+		
+		// Log details about detected issues for debugging
+		if (grammarIssues.size() > 0) {
+			LOGGER.info("=== SPELLING ERRORS DETECTED ===");
+			for (GrammarIssue issue : grammarIssues) {
+				LOGGER.info("  - Error: '" + issue.context + "' -> '" + issue.suggestion + "' in " + issue.elementType);
+			}
+			LOGGER.info("=================================");
+		} else {
+			LOGGER.info("No spelling errors detected in any of the " + textChunks.size() + " text chunks");
+		}
 
 		// Collect all links for broken link checking (including hidden ones, as they
 		// might still have 404 URLs)
@@ -1129,8 +1134,223 @@ public class StyleGuide_ValidatorQA {
 		resolutionDataMap.put(screenSize.name, websiteData);
 	}
 
+	/**
+	 * Step 1: Extract main content using readability-based approach
+	 * Focuses on article/main/content areas and paragraphs, excluding navigation/headers/footers
+	 */
+	private String extractMainContent(WebDriver driver) {
+		StringBuilder mainContent = new StringBuilder();
+		
+		try {
+			// Priority 1: Try to find main content containers (article, main, content areas)
+			String[] mainContentSelectors = {
+				"article",
+				"main",
+				"[role='main']",
+				".content",
+				"#content",
+				".main-content",
+				"#main-content",
+				".article",
+				"#article"
+			};
+			
+			boolean foundMainContent = false;
+			for (String selector : mainContentSelectors) {
+				try {
+					List<WebElement> elements = driver.findElements(By.cssSelector(selector));
+					for (WebElement element : elements) {
+						String text = element.getText();
+						if (text != null && text.trim().length() > 100) { // Only substantial content
+							mainContent.append(text).append("\n");
+							foundMainContent = true;
+						}
+					}
+					if (foundMainContent) break;
+				} catch (Exception e) {
+					// Continue to next selector
+				}
+			}
+			
+			// Priority 2: If no main content found, extract from paragraphs
+			if (!foundMainContent || mainContent.length() < 200) {
+				List<WebElement> paragraphs = driver.findElements(By.tagName("p"));
+				for (WebElement para : paragraphs) {
+					String text = para.getText();
+					if (text != null && text.trim().length() > 20) { // Filter very short paragraphs
+						mainContent.append(text.trim()).append("\n");
+					}
+				}
+			}
+			
+			// Priority 3: Extract from headings (H1-H6) for context
+			for (int i = 1; i <= 6; i++) {
+				List<WebElement> headings = driver.findElements(By.tagName("h" + i));
+				for (WebElement heading : headings) {
+					String text = heading.getText();
+					if (text != null && !text.trim().isEmpty()) {
+						mainContent.append(text.trim()).append("\n");
+					}
+				}
+			}
+			
+		} catch (Exception e) {
+			LOGGER.warning("Error in readability-based extraction, using body text: " + e.getMessage());
+			// Fallback: Use body text
+			try {
+				WebElement body = driver.findElement(By.tagName("body"));
+				String bodyText = body.getText();
+				if (bodyText != null) {
+					mainContent.append(bodyText);
+				}
+			} catch (Exception ex) {
+				LOGGER.warning("Error extracting body text: " + ex.getMessage());
+			}
+		}
+		
+		return mainContent.toString();
+	}
+
+	/**
+	 * Step 2a: Clean up text - remove extra whitespace, normalize
+	 */
+	private String cleanupText(String text) {
+		if (text == null || text.trim().isEmpty()) {
+			return "";
+		}
+		
+		// Remove extra whitespace and normalize line breaks
+		text = text.replaceAll("\\s+", " "); // Multiple spaces to single space
+		text = text.replaceAll("\\r\\n|\\r|\\n", " "); // Normalize line breaks
+		text = text.trim();
+		
+		// Remove common navigation/UI patterns
+		text = text.replaceAll("(?i)(home|about|contact|login|sign up|menu|navigation|skip to content)", "");
+		text = text.replaceAll("\\s+", " "); // Clean up again after removal
+		
+		return text.trim();
+	}
+
+	/**
+	 * Step 2b: Detect Lorem Ipsum placeholder text
+	 */
+	private boolean isLoremIpsum(String text) {
+		if (text == null || text.length() < 50) {
+			return false;
+		}
+		
+		String lowerText = text.toLowerCase();
+		// Common Lorem Ipsum patterns
+		String[] loremPatterns = {
+			"lorem ipsum",
+			"dolor sit amet",
+			"consectetur adipiscing",
+			"sed do eiusmod",
+			"tempor incididunt",
+			"ut labore et dolore"
+		};
+		
+		int matches = 0;
+		for (String pattern : loremPatterns) {
+			if (lowerText.contains(pattern)) {
+				matches++;
+			}
+		}
+		
+		// If 3+ patterns match, likely Lorem Ipsum
+		return matches >= 3;
+	}
+
+	/**
+	 * Step 3: Chunk text into 800-2000 character chunks
+	 * Tries to break at sentence boundaries when possible
+	 */
+	private List<String> chunkText(String text, int minChunkSize, int maxChunkSize) {
+		List<String> chunks = new ArrayList<>();
+		
+		if (text == null || text.trim().isEmpty()) {
+			return chunks;
+		}
+		
+		// If text is smaller than max chunk size, return as-is
+		if (text.length() <= maxChunkSize) {
+			chunks.add(text);
+			return chunks;
+		}
+		
+		// Split into sentences first (try to break at sentence boundaries)
+		String[] sentences = text.split("(?<=[.!?])\\s+");
+		StringBuilder currentChunk = new StringBuilder();
+		
+		for (String sentence : sentences) {
+			sentence = sentence.trim();
+			if (sentence.isEmpty()) continue;
+			
+			// If adding this sentence would exceed max size
+			if (currentChunk.length() + sentence.length() + 1 > maxChunkSize) {
+				// If current chunk is large enough, save it
+				if (currentChunk.length() >= minChunkSize) {
+					chunks.add(currentChunk.toString().trim());
+					currentChunk = new StringBuilder();
+				}
+				// If single sentence is too long, split it by words
+				if (sentence.length() > maxChunkSize) {
+					String[] words = sentence.split("\\s+");
+					for (String word : words) {
+						if (currentChunk.length() + word.length() + 1 > maxChunkSize) {
+							if (currentChunk.length() >= minChunkSize) {
+								chunks.add(currentChunk.toString().trim());
+								currentChunk = new StringBuilder();
+							}
+						}
+						if (currentChunk.length() > 0) {
+							currentChunk.append(" ");
+						}
+						currentChunk.append(word);
+					}
+				} else {
+					currentChunk.append(sentence);
+				}
+			} else {
+				if (currentChunk.length() > 0) {
+					currentChunk.append(" ");
+				}
+				currentChunk.append(sentence);
+			}
+		}
+		
+		// Add remaining chunk if it's large enough
+		if (currentChunk.length() >= minChunkSize) {
+			chunks.add(currentChunk.toString().trim());
+		} else if (currentChunk.length() > 0 && !chunks.isEmpty()) {
+			// Append to last chunk if it's too small
+			String lastChunk = chunks.get(chunks.size() - 1);
+			if (lastChunk.length() + currentChunk.length() <= maxChunkSize) {
+				chunks.set(chunks.size() - 1, lastChunk + " " + currentChunk.toString());
+			} else {
+				chunks.add(currentChunk.toString().trim());
+			}
+		}
+		
+		return chunks;
+	}
+
 	private List<GrammarIssue> parallelGrammarCheck(List<String> textChunks) {
 		LOGGER.info("Starting parallel grammar check for " + textChunks.size() + " text chunks");
+		
+		// Test LanguageTool with a known misspelling to verify it's working
+		try {
+			JLanguageTool testTool = new JLanguageTool(new AmericanEnglish());
+			List<RuleMatch> testMatches = testTool.check("This is a testt with a misspelling");
+			if (testMatches.isEmpty()) {
+				LOGGER.warning("WARNING: LanguageTool test failed - no matches found for known misspelling 'testt'");
+			} else {
+				LOGGER.info("LanguageTool test passed - found " + testMatches.size() + " match(es) for test misspelling");
+			}
+		} catch (Exception e) {
+			LOGGER.severe("CRITICAL: LanguageTool test failed: " + e.getMessage());
+			e.printStackTrace();
+		}
 
 		ExecutorService executor = Executors.newFixedThreadPool(4);
 		List<Future<List<GrammarIssue>>> futures = new ArrayList<>();
@@ -1756,6 +1976,1142 @@ public class StyleGuide_ValidatorQA {
 			LOGGER.warning("Error extracting progress/meter elements: " + e.getMessage());
 		}
 
+		// Extract Accordion Elements
+		try {
+			Set<String> processedAccordionIds = new HashSet<>();
+			
+			// First, try to find accordion headers directly on the page (not just within containers)
+			// This catches cases where accordion headers exist but containers aren't found
+			try {
+				List<WebElement> accordionHeaders = driver.findElements(By.cssSelector(
+					"button.accordion-button, " +
+					"div.accordion-header, " +
+					"div.accordion-item-title, " +
+					"div.accordion-toggle, " +
+					"span.accordion-title, " +
+					"span.e-n-accordion-item-title-header, " +
+					"div.e-n-accordion-item-title-text, " +
+					"[aria-controls]"
+				));
+				
+				for (WebElement header : accordionHeaders) {
+					try {
+						// Check if element exists and is in DOM
+						String tagName = header.getTagName();
+						if (tagName == null || tagName.isEmpty()) continue;
+						
+						// Try to get text - check multiple ways
+						String headerText = header.getText();
+						if (headerText == null || headerText.trim().isEmpty()) {
+							// Try to get text from child elements (like div.e-n-accordion-item-title-text)
+							try {
+								WebElement textElement = header.findElement(By.cssSelector("div.e-n-accordion-item-title-text, span.e-n-accordion-item-title-text, div, span"));
+								headerText = textElement.getText();
+							} catch (Exception ex) {
+								// Try getting textContent attribute
+								headerText = header.getAttribute("textContent");
+								if (headerText == null || headerText.trim().isEmpty()) {
+									headerText = header.getAttribute("innerText");
+								}
+							}
+						}
+						
+						if (headerText == null || headerText.trim().isEmpty()) {
+							continue;
+						}
+						
+						// Create unique identifier
+						String headerId = header.getAttribute("id");
+						if (headerId == null || headerId.isEmpty()) {
+							headerId = headerText.length() > 50 ? headerText.substring(0, 50) : headerText;
+						}
+						
+						// Skip if already processed
+						if (processedAccordionIds.contains(headerId)) {
+							continue;
+						}
+						processedAccordionIds.add(headerId);
+						
+						String ariaControls = header.getAttribute("aria-controls");
+						
+						// Try to find corresponding content
+						String contentText = "";
+						if (ariaControls != null && !ariaControls.isEmpty()) {
+							try {
+								WebElement content = driver.findElement(By.id(ariaControls));
+								if (content != null) {
+									contentText = content.getText();
+								}
+							} catch (Exception ex) {
+								// Content not found by ID, try to find sibling content
+								try {
+									WebElement parent = header.findElement(By.xpath("./ancestor::*[contains(@class, 'accordion')]"));
+									List<WebElement> contents = parent.findElements(By.cssSelector(
+										"div.accordion-collapse, div.accordion-content, div.accordion-body, " +
+										"div.accordion-panel, div.e-n-accordion-item-content, div.collapse"
+									));
+									if (!contents.isEmpty()) {
+										contentText = contents.get(0).getText();
+									}
+								} catch (Exception ex2) {
+									// No content found
+								}
+							}
+						}
+						
+						if (contentText == null) contentText = "";
+						
+						// Extract CSS properties from accordion header
+						String fontFamily = "Not available";
+						String fontSize = "Not available";
+						String fontWeight = "Not available";
+						String lineHeight = "Not available";
+						String letterSpacing = "Not available";
+						String textColor = "Not available";
+						String url = "Not available";
+						
+						try {
+							fontFamily = header.getCssValue("font-family") != null ? header.getCssValue("font-family") : "Not available";
+							fontSize = header.getCssValue("font-size") != null ? header.getCssValue("font-size") : "Not available";
+							fontWeight = header.getCssValue("font-weight") != null ? header.getCssValue("font-weight") : "Not available";
+							lineHeight = header.getCssValue("line-height") != null ? header.getCssValue("line-height") : "Not available";
+							letterSpacing = header.getCssValue("letter-spacing") != null ? header.getCssValue("letter-spacing") : "Not available";
+							textColor = header.getCssValue("color") != null ? header.getCssValue("color") : "Not available";
+							
+							// Check if header contains a link
+							try {
+								WebElement link = header.findElement(By.tagName("a"));
+								if (link != null) {
+									String href = link.getAttribute("href");
+									if (href != null && !href.isEmpty()) {
+										url = href;
+									}
+								}
+							} catch (Exception ex) {
+								// No link in header, check content
+								if (ariaControls != null && !ariaControls.isEmpty()) {
+									try {
+										WebElement content = driver.findElement(By.id(ariaControls));
+										WebElement contentLink = content.findElement(By.tagName("a"));
+										if (contentLink != null) {
+											String href = contentLink.getAttribute("href");
+											if (href != null && !href.isEmpty()) {
+												url = href;
+											}
+										}
+									} catch (Exception ex2) {
+										// No link found
+									}
+								}
+							}
+						} catch (Exception e) {
+							LOGGER.warning("Error extracting CSS properties for accordion element: " + e.getMessage());
+						}
+						
+						// Store accordion item
+						String accordionText = headerText.trim() + (contentText.trim().isEmpty() ? "" : ": " + contentText.trim());
+						accordionText = accordionText.length() > 200 ? accordionText.substring(0, 200) + "..." : accordionText;
+						
+						// Store: fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, textColor, url (empty for background color)
+						otherElements.add(new OtherElement("accordion", accordionText, 
+							fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, "", textColor, url));
+					} catch (StaleElementReferenceException e) {
+						// Element became stale, skip it
+						continue;
+					} catch (Exception e) {
+						// Continue with next header
+						continue;
+					}
+				}
+			} catch (Exception ex) {
+				LOGGER.warning("Error extracting accordion headers directly: " + ex.getMessage());
+			}
+			
+			// Also find accordion containers using various selectors
+			String[] accordionContainerSelectors = {
+				"div.accordion",
+				"div.accordion-group",
+				"div.accordion-container",
+				"div.e-n-accordion",
+				"div.ui-accordion"
+			};
+			
+			for (String selector : accordionContainerSelectors) {
+				try {
+					List<WebElement> accordionContainers = driver.findElements(By.cssSelector(selector));
+					for (WebElement container : accordionContainers) {
+						try {
+							String containerId = container.getAttribute("id");
+							if (containerId == null || containerId.isEmpty()) {
+								containerId = container.getAttribute("class");
+							}
+							
+							// Skip if already processed
+							if (containerId != null && processedAccordionIds.contains(containerId)) {
+								continue;
+							}
+							
+							if (containerId != null) {
+								processedAccordionIds.add(containerId);
+							}
+							
+							// Find accordion items within the container
+							try {
+								// Look for accordion headers within container
+								List<WebElement> accordionHeaders = container.findElements(By.cssSelector(
+									"button.accordion-button, " +
+									"div.accordion-header, " +
+									"div.accordion-item-title, " +
+									"div.accordion-toggle, " +
+									"span.accordion-title, " +
+									"span.e-n-accordion-item-title-header, " +
+									"div.e-n-accordion-item-title-text, " +
+									"[aria-controls]"
+								));
+								
+								// Look for accordion content
+								List<WebElement> accordionContents = container.findElements(By.cssSelector(
+									"div.accordion-collapse, " +
+									"div.accordion-content, " +
+									"div.accordion-body, " +
+									"div.accordion-panel, " +
+									"div.e-n-accordion-item-content, " +
+									"div.collapse"
+								));
+								
+								// Extract accordion items
+								for (int i = 0; i < accordionHeaders.size(); i++) {
+									WebElement header = accordionHeaders.get(i);
+									
+									String headerText = header.getText();
+									if (headerText == null || headerText.trim().isEmpty()) {
+										// Try to get text from child elements
+										try {
+											WebElement textElement = header.findElement(By.cssSelector("div.e-n-accordion-item-title-text, span.e-n-accordion-item-title-text, span, div, button"));
+											headerText = textElement.getText();
+										} catch (Exception ex) {
+											headerText = header.getAttribute("textContent");
+											if (headerText == null || headerText.trim().isEmpty()) {
+												headerText = "Accordion Item";
+											}
+										}
+									}
+									
+									if (headerText == null || headerText.trim().isEmpty()) {
+										continue;
+									}
+									
+									String headerId = headerText.length() > 50 ? headerText.substring(0, 50) : headerText;
+									if (processedAccordionIds.contains(headerId)) {
+										continue;
+									}
+									processedAccordionIds.add(headerId);
+									
+									String ariaControls = header.getAttribute("aria-controls");
+									
+									// Get corresponding content if available
+									String contentText = "";
+									if (i < accordionContents.size()) {
+										WebElement content = accordionContents.get(i);
+										contentText = content.getText();
+									} else if (ariaControls != null && !ariaControls.isEmpty()) {
+										// Try to find content by aria-controls
+										try {
+											WebElement content = driver.findElement(By.id(ariaControls));
+											if (content != null) {
+												contentText = content.getText();
+											}
+										} catch (Exception ex) {
+											// Content not found by ID
+										}
+									}
+									
+									if (contentText == null) contentText = "";
+									
+									// Extract CSS properties from accordion header
+									String fontFamily = "Not available";
+									String fontSize = "Not available";
+									String fontWeight = "Not available";
+									String lineHeight = "Not available";
+									String letterSpacing = "Not available";
+									String backgroundColor = "Not available";
+									String textColor = "Not available";
+									String url = "Not available";
+									
+									try {
+										// Use JavaScript to ensure we get computed styles from the header element
+										JavascriptExecutor js = (JavascriptExecutor) driver;
+										
+										fontFamily = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).fontFamily;", header);
+										if (fontFamily == null || fontFamily.isEmpty()) {
+											fontFamily = header.getCssValue("font-family");
+										}
+										fontFamily = (fontFamily != null && !fontFamily.isEmpty()) ? fontFamily : "Not available";
+										
+										fontSize = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).fontSize;", header);
+										if (fontSize == null || fontSize.isEmpty()) {
+											fontSize = header.getCssValue("font-size");
+										}
+										fontSize = (fontSize != null && !fontSize.isEmpty()) ? fontSize : "Not available";
+										
+										fontWeight = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).fontWeight;", header);
+										if (fontWeight == null || fontWeight.isEmpty()) {
+											fontWeight = header.getCssValue("font-weight");
+										}
+										fontWeight = (fontWeight != null && !fontWeight.isEmpty()) ? fontWeight : "Not available";
+										
+										lineHeight = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).lineHeight;", header);
+										if (lineHeight == null || lineHeight.isEmpty()) {
+											lineHeight = header.getCssValue("line-height");
+										}
+										lineHeight = (lineHeight != null && !lineHeight.isEmpty()) ? lineHeight : "Not available";
+										
+										letterSpacing = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).letterSpacing;", header);
+										if (letterSpacing == null || letterSpacing.isEmpty()) {
+											letterSpacing = header.getCssValue("letter-spacing");
+										}
+										letterSpacing = (letterSpacing != null && !letterSpacing.isEmpty()) ? letterSpacing : "Not available";
+										
+										textColor = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).color;", header);
+										if (textColor == null || textColor.isEmpty()) {
+											textColor = header.getCssValue("color");
+										}
+										textColor = (textColor != null && !textColor.isEmpty()) ? textColor : "Not available";
+										
+										// Get background color with hover support
+										String defaultBg = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).backgroundColor;", header);
+										if (defaultBg == null || defaultBg.isEmpty()) {
+											defaultBg = header.getCssValue("background-color");
+										}
+										defaultBg = (defaultBg != null && !defaultBg.isEmpty()) ? defaultBg : "Not available";
+										backgroundColor = getBackgroundColorWithHover(header, defaultBg);
+										
+										// Check if header contains a link
+										try {
+											WebElement link = header.findElement(By.tagName("a"));
+											if (link != null) {
+												String href = link.getAttribute("href");
+												if (href != null && !href.isEmpty()) {
+													url = href;
+												}
+											}
+										} catch (Exception ex) {
+											// No link in header, check content
+											if (ariaControls != null && !ariaControls.isEmpty()) {
+												try {
+													WebElement content = driver.findElement(By.id(ariaControls));
+													WebElement contentLink = content.findElement(By.tagName("a"));
+													if (contentLink != null) {
+														String href = contentLink.getAttribute("href");
+														if (href != null && !href.isEmpty()) {
+															url = href;
+														}
+													}
+												} catch (Exception ex2) {
+													// No link found
+												}
+											}
+										}
+									} catch (Exception e) {
+										LOGGER.warning("Error extracting CSS properties for accordion element: " + e.getMessage());
+										// Fallback to basic extraction
+										try {
+											fontFamily = header.getCssValue("font-family") != null ? header.getCssValue("font-family") : "Not available";
+											fontSize = header.getCssValue("font-size") != null ? header.getCssValue("font-size") : "Not available";
+											fontWeight = header.getCssValue("font-weight") != null ? header.getCssValue("font-weight") : "Not available";
+											lineHeight = header.getCssValue("line-height") != null ? header.getCssValue("line-height") : "Not available";
+											letterSpacing = header.getCssValue("letter-spacing") != null ? header.getCssValue("letter-spacing") : "Not available";
+											textColor = header.getCssValue("color") != null ? header.getCssValue("color") : "Not available";
+											String defaultBg = header.getCssValue("background-color") != null ? header.getCssValue("background-color") : "Not available";
+											backgroundColor = getBackgroundColorWithHover(header, defaultBg);
+										} catch (Exception ex) {
+											// Ignore
+										}
+									}
+									
+									// Store accordion item
+									String accordionText = headerText.trim() + (contentText.trim().isEmpty() ? "" : ": " + contentText.trim());
+									accordionText = accordionText.length() > 200 ? accordionText.substring(0, 200) + "..." : accordionText;
+									
+									// Store: fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, backgroundColor, textColor, url
+									otherElements.add(new OtherElement("accordion", accordionText, 
+										fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, backgroundColor, textColor, url));
+								}
+								
+								// If no headers found, try to extract content from the container directly
+								if (accordionHeaders.isEmpty() && !accordionContents.isEmpty()) {
+									for (WebElement content : accordionContents) {
+										String contentText = content.getText();
+										if (contentText != null && !contentText.trim().isEmpty()) {
+											contentText = contentText.length() > 200 ? contentText.substring(0, 200) + "..." : contentText;
+											
+											// Extract CSS properties from content element
+											String fontFamily = "Not available";
+											String fontSize = "Not available";
+											String fontWeight = "Not available";
+											String lineHeight = "Not available";
+											String letterSpacing = "Not available";
+											String backgroundColor = "Not available";
+											String textColor = "Not available";
+											String url = "Not available";
+											
+											try {
+												// Use JavaScript to ensure we get computed styles from the content element
+												JavascriptExecutor js = (JavascriptExecutor) driver;
+												
+												fontFamily = (String) js.executeScript(
+													"return window.getComputedStyle(arguments[0]).fontFamily;", content);
+												if (fontFamily == null || fontFamily.isEmpty()) {
+													fontFamily = content.getCssValue("font-family");
+												}
+												fontFamily = (fontFamily != null && !fontFamily.isEmpty()) ? fontFamily : "Not available";
+												
+												fontSize = (String) js.executeScript(
+													"return window.getComputedStyle(arguments[0]).fontSize;", content);
+												if (fontSize == null || fontSize.isEmpty()) {
+													fontSize = content.getCssValue("font-size");
+												}
+												fontSize = (fontSize != null && !fontSize.isEmpty()) ? fontSize : "Not available";
+												
+												fontWeight = (String) js.executeScript(
+													"return window.getComputedStyle(arguments[0]).fontWeight;", content);
+												if (fontWeight == null || fontWeight.isEmpty()) {
+													fontWeight = content.getCssValue("font-weight");
+												}
+												fontWeight = (fontWeight != null && !fontWeight.isEmpty()) ? fontWeight : "Not available";
+												
+												lineHeight = (String) js.executeScript(
+													"return window.getComputedStyle(arguments[0]).lineHeight;", content);
+												if (lineHeight == null || lineHeight.isEmpty()) {
+													lineHeight = content.getCssValue("line-height");
+												}
+												lineHeight = (lineHeight != null && !lineHeight.isEmpty()) ? lineHeight : "Not available";
+												
+												letterSpacing = (String) js.executeScript(
+													"return window.getComputedStyle(arguments[0]).letterSpacing;", content);
+												if (letterSpacing == null || letterSpacing.isEmpty()) {
+													letterSpacing = content.getCssValue("letter-spacing");
+												}
+												letterSpacing = (letterSpacing != null && !letterSpacing.isEmpty()) ? letterSpacing : "Not available";
+												
+												textColor = (String) js.executeScript(
+													"return window.getComputedStyle(arguments[0]).color;", content);
+												if (textColor == null || textColor.isEmpty()) {
+													textColor = content.getCssValue("color");
+												}
+												textColor = (textColor != null && !textColor.isEmpty()) ? textColor : "Not available";
+												
+												// Get background color with hover support
+												String defaultBg = (String) js.executeScript(
+													"return window.getComputedStyle(arguments[0]).backgroundColor;", content);
+												if (defaultBg == null || defaultBg.isEmpty()) {
+													defaultBg = content.getCssValue("background-color");
+												}
+												defaultBg = (defaultBg != null && !defaultBg.isEmpty()) ? defaultBg : "Not available";
+												backgroundColor = getBackgroundColorWithHover(content, defaultBg);
+												
+												// Check if content contains a link
+												try {
+													WebElement link = content.findElement(By.tagName("a"));
+													if (link != null) {
+														String href = link.getAttribute("href");
+														if (href != null && !href.isEmpty()) {
+															url = href;
+														}
+													}
+												} catch (Exception ex) {
+													// No link found
+												}
+											} catch (Exception e) {
+												LOGGER.warning("Error extracting CSS properties for accordion content: " + e.getMessage());
+												// Fallback to basic extraction
+												try {
+													fontFamily = content.getCssValue("font-family") != null ? content.getCssValue("font-family") : "Not available";
+													fontSize = content.getCssValue("font-size") != null ? content.getCssValue("font-size") : "Not available";
+													fontWeight = content.getCssValue("font-weight") != null ? content.getCssValue("font-weight") : "Not available";
+													lineHeight = content.getCssValue("line-height") != null ? content.getCssValue("line-height") : "Not available";
+													letterSpacing = content.getCssValue("letter-spacing") != null ? content.getCssValue("letter-spacing") : "Not available";
+													textColor = content.getCssValue("color") != null ? content.getCssValue("color") : "Not available";
+													String defaultBg = content.getCssValue("background-color") != null ? content.getCssValue("background-color") : "Not available";
+													backgroundColor = getBackgroundColorWithHover(content, defaultBg);
+												} catch (Exception ex) {
+													// Ignore
+												}
+											}
+											
+											otherElements.add(new OtherElement("accordion", contentText, 
+												fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, backgroundColor, textColor, url));
+										}
+									}
+								}
+							} catch (Exception ex) {
+								// If structured accordion not found, try to get text from container
+								String containerText = container.getText();
+								if (containerText != null && !containerText.trim().isEmpty()) {
+									containerText = containerText.length() > 200 ? containerText.substring(0, 200) + "..." : containerText;
+									
+									// Extract CSS properties from container element
+									String fontFamily = "Not available";
+									String fontSize = "Not available";
+									String fontWeight = "Not available";
+									String lineHeight = "Not available";
+									String letterSpacing = "Not available";
+									String backgroundColor = "Not available";
+									String textColor = "Not available";
+									String url = "Not available";
+									
+									try {
+										// Use JavaScript to ensure we get computed styles from the container element
+										JavascriptExecutor js = (JavascriptExecutor) driver;
+										
+										fontFamily = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).fontFamily;", container);
+										if (fontFamily == null || fontFamily.isEmpty()) {
+											fontFamily = container.getCssValue("font-family");
+										}
+										fontFamily = (fontFamily != null && !fontFamily.isEmpty()) ? fontFamily : "Not available";
+										
+										fontSize = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).fontSize;", container);
+										if (fontSize == null || fontSize.isEmpty()) {
+											fontSize = container.getCssValue("font-size");
+										}
+										fontSize = (fontSize != null && !fontSize.isEmpty()) ? fontSize : "Not available";
+										
+										fontWeight = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).fontWeight;", container);
+										if (fontWeight == null || fontWeight.isEmpty()) {
+											fontWeight = container.getCssValue("font-weight");
+										}
+										fontWeight = (fontWeight != null && !fontWeight.isEmpty()) ? fontWeight : "Not available";
+										
+										lineHeight = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).lineHeight;", container);
+										if (lineHeight == null || lineHeight.isEmpty()) {
+											lineHeight = container.getCssValue("line-height");
+										}
+										lineHeight = (lineHeight != null && !lineHeight.isEmpty()) ? lineHeight : "Not available";
+										
+										letterSpacing = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).letterSpacing;", container);
+										if (letterSpacing == null || letterSpacing.isEmpty()) {
+											letterSpacing = container.getCssValue("letter-spacing");
+										}
+										letterSpacing = (letterSpacing != null && !letterSpacing.isEmpty()) ? letterSpacing : "Not available";
+										
+										textColor = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).color;", container);
+										if (textColor == null || textColor.isEmpty()) {
+											textColor = container.getCssValue("color");
+										}
+										textColor = (textColor != null && !textColor.isEmpty()) ? textColor : "Not available";
+										
+										// Get background color with hover support
+										String defaultBg = (String) js.executeScript(
+											"return window.getComputedStyle(arguments[0]).backgroundColor;", container);
+										if (defaultBg == null || defaultBg.isEmpty()) {
+											defaultBg = container.getCssValue("background-color");
+										}
+										defaultBg = (defaultBg != null && !defaultBg.isEmpty()) ? defaultBg : "Not available";
+										backgroundColor = getBackgroundColorWithHover(container, defaultBg);
+										
+										// Check if container contains a link
+										try {
+											WebElement link = container.findElement(By.tagName("a"));
+											if (link != null) {
+												String href = link.getAttribute("href");
+												if (href != null && !href.isEmpty()) {
+													url = href;
+												}
+											}
+										} catch (Exception ex2) {
+											// No link found
+										}
+									} catch (Exception e) {
+										LOGGER.warning("Error extracting CSS properties for accordion container: " + e.getMessage());
+										// Fallback to basic extraction
+										try {
+											fontFamily = container.getCssValue("font-family") != null ? container.getCssValue("font-family") : "Not available";
+											fontSize = container.getCssValue("font-size") != null ? container.getCssValue("font-size") : "Not available";
+											fontWeight = container.getCssValue("font-weight") != null ? container.getCssValue("font-weight") : "Not available";
+											lineHeight = container.getCssValue("line-height") != null ? container.getCssValue("line-height") : "Not available";
+											letterSpacing = container.getCssValue("letter-spacing") != null ? container.getCssValue("letter-spacing") : "Not available";
+											textColor = container.getCssValue("color") != null ? container.getCssValue("color") : "Not available";
+											String defaultBg = container.getCssValue("background-color") != null ? container.getCssValue("background-color") : "Not available";
+											backgroundColor = getBackgroundColorWithHover(container, defaultBg);
+										} catch (Exception exInner) {
+											// Ignore
+										}
+									}
+									
+									otherElements.add(new OtherElement("accordion", containerText, 
+										fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, backgroundColor, textColor, url));
+								}
+							}
+						} catch (StaleElementReferenceException e) {
+							continue;
+						} catch (Exception e) {
+							continue;
+						}
+					}
+				} catch (Exception ex) {
+					// Continue with next selector
+				}
+			}
+			
+			// Also check for native HTML <details> elements that might be used as accordions
+			try {
+				List<WebElement> detailsElements = driver.findElements(By.tagName("details"));
+				for (WebElement detail : detailsElements) {
+					try {
+						// Check if this details element has accordion-like structure
+						String detailClass = detail.getAttribute("class");
+						boolean isAccordionLike = detailClass != null && (
+							detailClass.contains("accordion") || 
+							detailClass.contains("collapse") ||
+							detailClass.contains("toggle")
+						);
+						
+						if (isAccordionLike) {
+							String detailText = detail.getText();
+							if (detailText != null && !detailText.trim().isEmpty()) {
+								detailText = detailText.length() > 200 ? detailText.substring(0, 200) + "..." : detailText;
+								
+								// Extract CSS properties from details element
+								String fontFamily = "Not available";
+								String fontSize = "Not available";
+								String fontWeight = "Not available";
+								String lineHeight = "Not available";
+								String letterSpacing = "Not available";
+								String backgroundColor = "Not available";
+								String textColor = "Not available";
+								String url = "Not available";
+								
+								try {
+									// Use JavaScript to ensure we get computed styles from the details element
+									JavascriptExecutor js = (JavascriptExecutor) driver;
+									
+									fontFamily = (String) js.executeScript(
+										"return window.getComputedStyle(arguments[0]).fontFamily;", detail);
+									if (fontFamily == null || fontFamily.isEmpty()) {
+										fontFamily = detail.getCssValue("font-family");
+									}
+									fontFamily = (fontFamily != null && !fontFamily.isEmpty()) ? fontFamily : "Not available";
+									
+									fontSize = (String) js.executeScript(
+										"return window.getComputedStyle(arguments[0]).fontSize;", detail);
+									if (fontSize == null || fontSize.isEmpty()) {
+										fontSize = detail.getCssValue("font-size");
+									}
+									fontSize = (fontSize != null && !fontSize.isEmpty()) ? fontSize : "Not available";
+									
+									fontWeight = (String) js.executeScript(
+										"return window.getComputedStyle(arguments[0]).fontWeight;", detail);
+									if (fontWeight == null || fontWeight.isEmpty()) {
+										fontWeight = detail.getCssValue("font-weight");
+									}
+									fontWeight = (fontWeight != null && !fontWeight.isEmpty()) ? fontWeight : "Not available";
+									
+									lineHeight = (String) js.executeScript(
+										"return window.getComputedStyle(arguments[0]).lineHeight;", detail);
+									if (lineHeight == null || lineHeight.isEmpty()) {
+										lineHeight = detail.getCssValue("line-height");
+									}
+									lineHeight = (lineHeight != null && !lineHeight.isEmpty()) ? lineHeight : "Not available";
+									
+									letterSpacing = (String) js.executeScript(
+										"return window.getComputedStyle(arguments[0]).letterSpacing;", detail);
+									if (letterSpacing == null || letterSpacing.isEmpty()) {
+										letterSpacing = detail.getCssValue("letter-spacing");
+									}
+									letterSpacing = (letterSpacing != null && !letterSpacing.isEmpty()) ? letterSpacing : "Not available";
+									
+									textColor = (String) js.executeScript(
+										"return window.getComputedStyle(arguments[0]).color;", detail);
+									if (textColor == null || textColor.isEmpty()) {
+										textColor = detail.getCssValue("color");
+									}
+									textColor = (textColor != null && !textColor.isEmpty()) ? textColor : "Not available";
+									
+									// Get background color with hover support
+									String defaultBg = (String) js.executeScript(
+										"return window.getComputedStyle(arguments[0]).backgroundColor;", detail);
+									if (defaultBg == null || defaultBg.isEmpty()) {
+										defaultBg = detail.getCssValue("background-color");
+									}
+									defaultBg = (defaultBg != null && !defaultBg.isEmpty()) ? defaultBg : "Not available";
+									backgroundColor = getBackgroundColorWithHover(detail, defaultBg);
+									
+									// Check if details contains a link
+									try {
+										WebElement link = detail.findElement(By.tagName("a"));
+										if (link != null) {
+											String href = link.getAttribute("href");
+											if (href != null && !href.isEmpty()) {
+												url = href;
+											}
+										}
+									} catch (Exception ex) {
+										// No link found
+									}
+								} catch (Exception e) {
+									LOGGER.warning("Error extracting CSS properties for accordion details: " + e.getMessage());
+									// Fallback to basic extraction
+									try {
+										fontFamily = detail.getCssValue("font-family") != null ? detail.getCssValue("font-family") : "Not available";
+										fontSize = detail.getCssValue("font-size") != null ? detail.getCssValue("font-size") : "Not available";
+										fontWeight = detail.getCssValue("font-weight") != null ? detail.getCssValue("font-weight") : "Not available";
+										lineHeight = detail.getCssValue("line-height") != null ? detail.getCssValue("line-height") : "Not available";
+										letterSpacing = detail.getCssValue("letter-spacing") != null ? detail.getCssValue("letter-spacing") : "Not available";
+										textColor = detail.getCssValue("color") != null ? detail.getCssValue("color") : "Not available";
+										String defaultBg = detail.getCssValue("background-color") != null ? detail.getCssValue("background-color") : "Not available";
+										backgroundColor = getBackgroundColorWithHover(detail, defaultBg);
+									} catch (Exception ex) {
+										// Ignore
+									}
+								}
+								
+								otherElements.add(new OtherElement("accordion", detailText, 
+									fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, backgroundColor, textColor, url));
+							}
+						}
+					} catch (StaleElementReferenceException e) {
+						continue;
+					} catch (Exception e) {
+						continue;
+					}
+				}
+			} catch (Exception ex) {
+				// Continue
+			}
+		} catch (Exception e) {
+			LOGGER.warning("Error extracting accordion elements: " + e.getMessage());
+		}
+
+		// Extract UL/LI Elements (only <li> items from <ul> lists)
+		try {
+			Set<String> processedLiIds = new HashSet<>();
+			
+			// First, find all <li> elements directly on the page that are within <ul> elements
+			// This approach is more reliable than checking if parent <ul> is displayed
+			List<WebElement> allLiElements = driver.findElements(By.tagName("li"));
+			
+			for (WebElement li : allLiElements) {
+				try {
+					// Check if element exists in DOM
+					String tagName = li.getTagName();
+					if (tagName == null || tagName.isEmpty()) continue;
+					
+					// Check if this <li> is inside a <ul> (not <ol>)
+					boolean isInsideUl = false;
+					try {
+						WebElement parent = li.findElement(By.xpath("./ancestor::ul[1]"));
+						if (parent != null) {
+							isInsideUl = true;
+						}
+					} catch (Exception ex) {
+						// Not inside a <ul>, skip it
+						continue;
+					}
+					
+					if (!isInsideUl) {
+						continue;
+					}
+					
+					// Get the text content of the <li> - try multiple methods
+					String liText = li.getText();
+					if (liText == null || liText.trim().isEmpty()) {
+						// Try textContent attribute
+						liText = li.getAttribute("textContent");
+						if (liText == null || liText.trim().isEmpty()) {
+							// Try innerText
+							liText = li.getAttribute("innerText");
+						}
+					}
+					
+					if (liText == null || liText.trim().isEmpty()) {
+						continue;
+					}
+					
+					// Clean up the text (remove extra whitespace)
+					liText = liText.trim();
+					
+					// Create a unique identifier to avoid duplicates
+					String liId = li.getAttribute("id");
+					if (liId == null || liId.isEmpty()) {
+						// Use text as identifier (first 50 chars)
+						liId = liText.length() > 50 ? liText.substring(0, 50) : liText;
+					}
+					
+					// Skip if already processed
+					if (processedLiIds.contains(liId)) {
+						continue;
+					}
+					processedLiIds.add(liId);
+					
+					// Extract CSS properties for LI elements
+					String fontFamily = "Not available";
+					String fontSize = "Not available";
+					String fontWeight = "Not available";
+					String lineHeight = "Not available";
+					String letterSpacing = "Not available";
+					String backgroundColor = "Not available";
+					String textColor = "Not available";
+					String url = "Not available";
+					
+					try {
+						// Find the actual text-containing element to get accurate font styles
+						// Priority: span > a > other text elements > LI itself
+						WebElement textElement = null;
+						try {
+							// First try to find a span element (most common for styled text)
+							List<WebElement> spans = li.findElements(By.tagName("span"));
+							for (WebElement span : spans) {
+								if (span.isDisplayed()) {
+									String spanText = span.getText();
+									if (spanText != null && !spanText.trim().isEmpty()) {
+										textElement = span;
+										break;
+									}
+								}
+							}
+							// If no span found, try link element
+							if (textElement == null) {
+								List<WebElement> links = li.findElements(By.tagName("a"));
+								for (WebElement link : links) {
+									if (link.isDisplayed()) {
+										String linkText = link.getText();
+										if (linkText != null && !linkText.trim().isEmpty()) {
+											textElement = link;
+											break;
+										}
+									}
+								}
+							}
+						} catch (Exception ex) {
+							// If we can't find child elements, use LI itself
+						}
+						
+						// Use the text element if found, otherwise use LI element
+						WebElement elementToStyle = (textElement != null) ? textElement : li;
+						
+						// Use JavaScript to ensure we get computed styles from the actual text element
+						JavascriptExecutor js = (JavascriptExecutor) driver;
+						
+						// Get computed styles directly from the element that contains the text
+						String jsScript = 
+							"var elem = arguments[0]; " +
+							"var style = window.getComputedStyle(elem); " +
+							"return { " +
+							"  fontFamily: style.fontFamily, " +
+							"  fontSize: style.fontSize, " +
+							"  fontWeight: style.fontWeight, " +
+							"  lineHeight: style.lineHeight, " +
+							"  letterSpacing: style.letterSpacing, " +
+							"  color: style.color, " +
+							"  backgroundColor: style.backgroundColor " +
+							"};";
+						
+						@SuppressWarnings("unchecked")
+						Map<String, String> styles = (Map<String, String>) js.executeScript(jsScript, elementToStyle);
+						
+						if (styles != null) {
+							fontFamily = styles.get("fontFamily");
+							fontFamily = (fontFamily != null && !fontFamily.isEmpty() && !fontFamily.equals("initial")) ? fontFamily : "Not available";
+							
+							fontSize = styles.get("fontSize");
+							fontSize = (fontSize != null && !fontSize.isEmpty() && !fontSize.equals("initial")) ? fontSize : "Not available";
+							
+							fontWeight = styles.get("fontWeight");
+							fontWeight = (fontWeight != null && !fontWeight.isEmpty() && !fontWeight.equals("initial")) ? fontWeight : "Not available";
+							
+							lineHeight = styles.get("lineHeight");
+							lineHeight = (lineHeight != null && !lineHeight.isEmpty() && !lineHeight.equals("initial")) ? lineHeight : "Not available";
+							
+							letterSpacing = styles.get("letterSpacing");
+							letterSpacing = (letterSpacing != null && !letterSpacing.isEmpty() && !letterSpacing.equals("initial")) ? letterSpacing : "Not available";
+							
+							textColor = styles.get("color");
+							textColor = (textColor != null && !textColor.isEmpty() && !textColor.equals("initial") && !textColor.equals("rgba(0, 0, 0, 0)")) ? textColor : "Not available";
+							
+							String defaultBg = styles.get("backgroundColor");
+							defaultBg = (defaultBg != null && !defaultBg.isEmpty() && !defaultBg.equals("initial") && !defaultBg.equals("rgba(0, 0, 0, 0)")) ? defaultBg : "Not available";
+							backgroundColor = getBackgroundColorWithHover(li, defaultBg);
+						} else {
+							// Fallback to individual property extraction using getCssValue
+							// This uses Selenium's getCssValue which also gets computed styles
+							fontFamily = elementToStyle.getCssValue("font-family");
+							fontFamily = (fontFamily != null && !fontFamily.isEmpty() && !fontFamily.equals("initial")) ? fontFamily : "Not available";
+							
+							fontSize = elementToStyle.getCssValue("font-size");
+							fontSize = (fontSize != null && !fontSize.isEmpty() && !fontSize.equals("initial")) ? fontSize : "Not available";
+							
+							fontWeight = elementToStyle.getCssValue("font-weight");
+							fontWeight = (fontWeight != null && !fontWeight.isEmpty() && !fontWeight.equals("initial")) ? fontWeight : "Not available";
+							
+							lineHeight = elementToStyle.getCssValue("line-height");
+							lineHeight = (lineHeight != null && !lineHeight.isEmpty() && !lineHeight.equals("initial")) ? lineHeight : "Not available";
+							
+							letterSpacing = elementToStyle.getCssValue("letter-spacing");
+							letterSpacing = (letterSpacing != null && !letterSpacing.isEmpty() && !letterSpacing.equals("initial")) ? letterSpacing : "Not available";
+							
+							textColor = elementToStyle.getCssValue("color");
+							textColor = (textColor != null && !textColor.isEmpty() && !textColor.equals("initial") && !textColor.equals("rgba(0, 0, 0, 0)")) ? textColor : "Not available";
+							
+							String defaultBg = elementToStyle.getCssValue("background-color");
+							defaultBg = (defaultBg != null && !defaultBg.isEmpty() && !defaultBg.equals("initial") && !defaultBg.equals("rgba(0, 0, 0, 0)")) ? defaultBg : "Not available";
+							backgroundColor = getBackgroundColorWithHover(li, defaultBg);
+						}
+						
+						// Check if LI contains a link
+						try {
+							WebElement link = li.findElement(By.tagName("a"));
+							if (link != null) {
+								String href = link.getAttribute("href");
+								if (href != null && !href.isEmpty()) {
+									url = href;
+								}
+							}
+						} catch (Exception ex) {
+							// No link found, url remains "Not available"
+						}
+					} catch (Exception e) {
+						LOGGER.warning("Error extracting CSS properties for LI element: " + e.getMessage());
+						// Fallback to basic extraction
+						try {
+							fontFamily = li.getCssValue("font-family") != null ? li.getCssValue("font-family") : "Not available";
+							fontSize = li.getCssValue("font-size") != null ? li.getCssValue("font-size") : "Not available";
+							fontWeight = li.getCssValue("font-weight") != null ? li.getCssValue("font-weight") : "Not available";
+							lineHeight = li.getCssValue("line-height") != null ? li.getCssValue("line-height") : "Not available";
+							letterSpacing = li.getCssValue("letter-spacing") != null ? li.getCssValue("letter-spacing") : "Not available";
+							backgroundColor = li.getCssValue("background-color") != null ? li.getCssValue("background-color") : "Not available";
+							textColor = li.getCssValue("color") != null ? li.getCssValue("color") : "Not available";
+						} catch (Exception ex) {
+							// Ignore
+						}
+					}
+					
+					// Truncate text if too long
+					liText = liText.length() > 200 ? liText.substring(0, 200) + "..." : liText;
+					
+					// Store: fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, backgroundColor, textColor, url
+					otherElements.add(new OtherElement("li", liText,
+						fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, backgroundColor, textColor, url));
+				} catch (StaleElementReferenceException e) {
+					// Element became stale, skip it
+					continue;
+				} catch (Exception e) {
+					// Continue with next LI
+					continue;
+				}
+			}
+			
+			// Also try the original approach for any <ul> elements that might have been missed
+			List<WebElement> ulElements = driver.findElements(By.tagName("ul"));
+			for (WebElement ul : ulElements) {
+				try {
+					// Get all <li> elements within this <ul>
+					List<WebElement> liElements = ul.findElements(By.tagName("li"));
+					
+					for (WebElement li : liElements) {
+						try {
+							// Get the text content
+							String liText = li.getText();
+							if (liText == null || liText.trim().isEmpty()) {
+								liText = li.getAttribute("textContent");
+								if (liText == null || liText.trim().isEmpty()) {
+									liText = li.getAttribute("innerText");
+								}
+							}
+							
+							if (liText == null || liText.trim().isEmpty()) {
+								continue;
+							}
+							
+							liText = liText.trim();
+							
+							// Create a unique identifier
+							String liId = li.getAttribute("id");
+							if (liId == null || liId.isEmpty()) {
+								liId = liText.length() > 50 ? liText.substring(0, 50) : liText;
+							}
+							
+							// Skip if already processed
+							if (processedLiIds.contains(liId)) {
+								continue;
+							}
+							processedLiIds.add(liId);
+							
+							// Extract CSS properties for LI elements
+							String fontFamily = "Not available";
+							String fontSize = "Not available";
+							String fontWeight = "Not available";
+							String lineHeight = "Not available";
+							String letterSpacing = "Not available";
+							String backgroundColor = "Not available";
+							String textColor = "Not available";
+							String url = "Not available";
+							
+							try {
+								// Find the actual text-containing element to get accurate font styles
+								// Priority: span > a > other text elements > LI itself
+								WebElement textElement = null;
+								try {
+									// First try to find a span element (most common for styled text)
+									List<WebElement> spans = li.findElements(By.tagName("span"));
+									for (WebElement span : spans) {
+										if (span.isDisplayed()) {
+											String spanText = span.getText();
+											if (spanText != null && !spanText.trim().isEmpty()) {
+												textElement = span;
+												break;
+											}
+										}
+									}
+									// If no span found, try link element
+									if (textElement == null) {
+										List<WebElement> links = li.findElements(By.tagName("a"));
+										for (WebElement link : links) {
+											if (link.isDisplayed()) {
+												String linkText = link.getText();
+												if (linkText != null && !linkText.trim().isEmpty()) {
+													textElement = link;
+													break;
+												}
+											}
+										}
+									}
+								} catch (Exception ex) {
+									// If we can't find child elements, use LI itself
+								}
+								
+								// Use the text element if found, otherwise use LI element
+								WebElement elementToStyle = (textElement != null) ? textElement : li;
+								
+								// Use JavaScript to ensure we get computed styles from the actual text element
+								JavascriptExecutor js = (JavascriptExecutor) driver;
+								
+								// Get computed styles directly from the element that contains the text
+								String jsScript = 
+									"var elem = arguments[0]; " +
+									"var style = window.getComputedStyle(elem); " +
+									"return { " +
+									"  fontFamily: style.fontFamily, " +
+									"  fontSize: style.fontSize, " +
+									"  fontWeight: style.fontWeight, " +
+									"  lineHeight: style.lineHeight, " +
+									"  letterSpacing: style.letterSpacing, " +
+									"  color: style.color, " +
+									"  backgroundColor: style.backgroundColor " +
+									"};";
+								
+								@SuppressWarnings("unchecked")
+								Map<String, String> styles = (Map<String, String>) js.executeScript(jsScript, elementToStyle);
+								
+								if (styles != null) {
+									fontFamily = styles.get("fontFamily");
+									fontFamily = (fontFamily != null && !fontFamily.isEmpty() && !fontFamily.equals("initial")) ? fontFamily : "Not available";
+									
+									fontSize = styles.get("fontSize");
+									fontSize = (fontSize != null && !fontSize.isEmpty() && !fontSize.equals("initial")) ? fontSize : "Not available";
+									
+									fontWeight = styles.get("fontWeight");
+									fontWeight = (fontWeight != null && !fontWeight.isEmpty() && !fontWeight.equals("initial")) ? fontWeight : "Not available";
+									
+									lineHeight = styles.get("lineHeight");
+									lineHeight = (lineHeight != null && !lineHeight.isEmpty() && !lineHeight.equals("initial")) ? lineHeight : "Not available";
+									
+									letterSpacing = styles.get("letterSpacing");
+									letterSpacing = (letterSpacing != null && !letterSpacing.isEmpty() && !letterSpacing.equals("initial")) ? letterSpacing : "Not available";
+									
+									textColor = styles.get("color");
+									textColor = (textColor != null && !textColor.isEmpty() && !textColor.equals("initial") && !textColor.equals("rgba(0, 0, 0, 0)")) ? textColor : "Not available";
+									
+									String defaultBg = styles.get("backgroundColor");
+									defaultBg = (defaultBg != null && !defaultBg.isEmpty() && !defaultBg.equals("initial") && !defaultBg.equals("rgba(0, 0, 0, 0)")) ? defaultBg : "Not available";
+									backgroundColor = getBackgroundColorWithHover(li, defaultBg);
+								} else {
+									// Fallback to individual property extraction
+									fontFamily = (String) js.executeScript("return window.getComputedStyle(arguments[0]).fontFamily;", elementToStyle);
+									fontFamily = (fontFamily != null && !fontFamily.isEmpty()) ? fontFamily : "Not available";
+									
+									fontSize = (String) js.executeScript("return window.getComputedStyle(arguments[0]).fontSize;", elementToStyle);
+									fontSize = (fontSize != null && !fontSize.isEmpty()) ? fontSize : "Not available";
+									
+									fontWeight = (String) js.executeScript("return window.getComputedStyle(arguments[0]).fontWeight;", elementToStyle);
+									fontWeight = (fontWeight != null && !fontWeight.isEmpty()) ? fontWeight : "Not available";
+									
+									lineHeight = (String) js.executeScript("return window.getComputedStyle(arguments[0]).lineHeight;", elementToStyle);
+									lineHeight = (lineHeight != null && !lineHeight.isEmpty()) ? lineHeight : "Not available";
+									
+									letterSpacing = (String) js.executeScript("return window.getComputedStyle(arguments[0]).letterSpacing;", elementToStyle);
+									letterSpacing = (letterSpacing != null && !letterSpacing.isEmpty()) ? letterSpacing : "Not available";
+									
+									textColor = (String) js.executeScript("return window.getComputedStyle(arguments[0]).color;", elementToStyle);
+									textColor = (textColor != null && !textColor.isEmpty()) ? textColor : "Not available";
+									
+									String defaultBg = (String) js.executeScript("return window.getComputedStyle(arguments[0]).backgroundColor;", elementToStyle);
+									defaultBg = (defaultBg != null && !defaultBg.isEmpty()) ? defaultBg : "Not available";
+									backgroundColor = getBackgroundColorWithHover(li, defaultBg);
+								}
+								
+								// Check if LI contains a link
+								try {
+									WebElement link = li.findElement(By.tagName("a"));
+									if (link != null) {
+										String href = link.getAttribute("href");
+										if (href != null && !href.isEmpty()) {
+											url = href;
+										}
+									}
+								} catch (Exception ex) {
+									// No link found, url remains "Not available"
+								}
+							} catch (Exception e) {
+								LOGGER.warning("Error extracting CSS properties for LI element: " + e.getMessage());
+								// Fallback to basic extraction
+								try {
+									fontFamily = li.getCssValue("font-family") != null ? li.getCssValue("font-family") : "Not available";
+									fontSize = li.getCssValue("font-size") != null ? li.getCssValue("font-size") : "Not available";
+									fontWeight = li.getCssValue("font-weight") != null ? li.getCssValue("font-weight") : "Not available";
+									lineHeight = li.getCssValue("line-height") != null ? li.getCssValue("line-height") : "Not available";
+									letterSpacing = li.getCssValue("letter-spacing") != null ? li.getCssValue("letter-spacing") : "Not available";
+									backgroundColor = li.getCssValue("background-color") != null ? li.getCssValue("background-color") : "Not available";
+									textColor = li.getCssValue("color") != null ? li.getCssValue("color") : "Not available";
+								} catch (Exception ex) {
+									// Ignore
+								}
+							}
+							
+							// Truncate text if too long
+							liText = liText.length() > 200 ? liText.substring(0, 200) + "..." : liText;
+							
+							// Store: fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, backgroundColor, textColor, url
+							otherElements.add(new OtherElement("li", liText,
+								fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, backgroundColor, textColor, url));
+						} catch (StaleElementReferenceException e) {
+							continue;
+						} catch (Exception e) {
+							continue;
+						}
+					}
+				} catch (StaleElementReferenceException e) {
+					continue;
+				} catch (Exception e) {
+					continue;
+				}
+			}
+		} catch (Exception e) {
+			LOGGER.warning("Error extracting UL/LI elements: " + e.getMessage());
+		}
+
 		LOGGER.info("Extracted " + otherElements.size() + " other elements");
 		return otherElements;
 	}
@@ -2181,151 +3537,178 @@ public class StyleGuide_ValidatorQA {
 		}
 	}
 
+	/**
+	 * Step 4-7: Grammar/Spelling check with PROPER spelling-only logic
+	 * - LanguageTool (en-US) with ONLY spelling rules enabled
+	 * - Only accept MORFOLOGIK_RULE (the actual spelling checker)
+	 * - Verify matched text is a single word (spelling errors are word-level)
+	 */
 	private List<GrammarIssue> grammarCheck(String text) {
 		List<GrammarIssue> issues = new ArrayList<>();
 		try {
-			// Extract element type and actual text content
-			String elementType = "UNKNOWN";
-			String actualText = text;
+			String actualText = text.trim();
 
-			if (text.contains(":")) {
-				String[] parts = text.split(":", 2);
-				if (parts.length == 2) {
-					elementType = parts[0].trim();
-					actualText = parts[1].trim();
-				}
-			}
-
-			// Skip very short text or single words
-			if (actualText.length() < 3) {
+			// Skip very short text (less than 10 characters - too short to be meaningful)
+			if (actualText.length() < 10) {
 				LOGGER.fine("Skipping very short text: " + actualText);
 				return issues;
 			}
 
-			// Initialize LanguageTool
+			// Ensure XML parser limits are set (fallback in case static initializer didn't run)
+			if (System.getProperty("jdk.xml.totalEntitySizeLimit") == null) {
+				System.setProperty("jdk.xml.totalEntitySizeLimit", "-1");
+				System.setProperty("jdk.xml.entityExpansionLimit", "-1");
+				System.setProperty("jdk.xml.maxElementDepth", "10000");
+			}
+			
+			// Step 4: Initialize LanguageTool (en-US) and DISABLE ALL non-spelling rules
 			JLanguageTool langTool;
 			try {
 				langTool = new JLanguageTool(new AmericanEnglish());
-				LOGGER.fine("LanguageTool initialized successfully for text: "
-						+ actualText.substring(0, Math.min(50, actualText.length())));
+				
+				// Get all rules and disable everything EXCEPT spelling rules
+				List<Rule> allRules = langTool.getAllRules();
+				int spellingRulesCount = 0;
+				int disabledRulesCount = 0;
+				
+				for (Rule rule : allRules) {
+					String ruleId = rule.getId().toUpperCase();
+					// Only keep MORFOLOGIK rules (the actual spelling checker)
+					// MORFOLOGIK_RULE_EN_US is the main English spelling rule
+					boolean isSpellingRule = ruleId.contains("MORFOLOGIK") || ruleId.contains("HUNSPELL");
+					
+					if (isSpellingRule) {
+						spellingRulesCount++;
+						LOGGER.fine("Keeping spelling rule: " + rule.getId());
+					} else {
+						try {
+							langTool.disableRule(rule.getId());
+							disabledRulesCount++;
+						} catch (Exception e) {
+							// Some rules might not be disableable, ignore
+							LOGGER.fine("Could not disable rule: " + rule.getId() + " - " + e.getMessage());
+						}
+					}
+				}
+				LOGGER.info("LanguageTool initialized: " + spellingRulesCount + " spelling rules enabled, " + disabledRulesCount + " non-spelling rules disabled");
+			} catch (RuntimeException e) {
+				Throwable cause = e.getCause();
+				if (cause != null && cause.getMessage() != null && 
+				    cause.getMessage().contains("jdk.xml.totalEntitySizeLimit")) {
+					LOGGER.severe("CRITICAL: LanguageTool failed due to XML entity size limit. Retrying...");
+					System.setProperty("jdk.xml.totalEntitySizeLimit", "10000000");
+					System.setProperty("jdk.xml.entityExpansionLimit", "10000000");
+					try {
+						langTool = new JLanguageTool(new AmericanEnglish());
+						// Disable all non-spelling rules on retry too
+						List<Rule> allRules = langTool.getAllRules();
+						int spellingRulesCount = 0;
+						for (Rule rule : allRules) {
+							String ruleId = rule.getId().toUpperCase();
+							boolean isSpellingRule = ruleId.contains("MORFOLOGIK") || ruleId.contains("HUNSPELL");
+							if (isSpellingRule) {
+								spellingRulesCount++;
+							} else {
+								try {
+									langTool.disableRule(rule.getId());
+								} catch (Exception ex) {
+									// Ignore
+								}
+							}
+						}
+						LOGGER.info("LanguageTool initialized successfully on retry with " + spellingRulesCount + " spelling rules enabled");
+					} catch (Exception retryException) {
+						LOGGER.severe("CRITICAL: LanguageTool initialization failed: " + retryException.getMessage());
+						return issues;
+					}
+				} else {
+					LOGGER.severe("CRITICAL: Failed to initialize LanguageTool: " + e.getMessage());
+					return issues;
+				}
 			} catch (Exception e) {
-				LOGGER.warning("Failed to initialize LanguageTool: " + e.getMessage());
+				LOGGER.severe("CRITICAL: Failed to initialize LanguageTool: " + e.getMessage());
 				return issues;
 			}
 
-			// Disable all rules except spelling rules
-			langTool.disableRule("WHITESPACE_RULE");
-			langTool.disableRule("COMMA_PARENTHESIS_WHITESPACE");
-			langTool.disableRule("DOUBLE_PUNCTUATION");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END2");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END3");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END4");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END5");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END6");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END7");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END8");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END9");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END10");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END11");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END12");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END13");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END14");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END15");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END16");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END17");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END18");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END19");
-			langTool.disableRule("PUNCTUATION_PARAGRAPH_END20");
-
-			// Disable grammar rules but keep spelling rules
-			langTool.disableRule("EN_A_VS_AN");
-			langTool.disableRule("EN_AGREEMENT");
-			langTool.disableRule("EN_AGREEMENT_SENT_START");
-			langTool.disableRule("EN_AGREEMENT_SENT_START2");
-			langTool.disableRule("EN_AGREEMENT_SENT_START3");
-			langTool.disableRule("EN_AGREEMENT_SENT_START4");
-			langTool.disableRule("EN_AGREEMENT_SENT_START5");
-			langTool.disableRule("EN_AGREEMENT_SENT_START6");
-			langTool.disableRule("EN_AGREEMENT_SENT_START7");
-			langTool.disableRule("EN_AGREEMENT_SENT_START8");
-			langTool.disableRule("EN_AGREEMENT_SENT_START9");
-			langTool.disableRule("EN_AGREEMENT_SENT_START10");
-			langTool.disableRule("EN_AGREEMENT_SENT_START11");
-			langTool.disableRule("EN_AGREEMENT_SENT_START12");
-			langTool.disableRule("EN_AGREEMENT_SENT_START13");
-			langTool.disableRule("EN_AGREEMENT_SENT_START14");
-			langTool.disableRule("EN_AGREEMENT_SENT_START15");
-			langTool.disableRule("EN_AGREEMENT_SENT_START16");
-			langTool.disableRule("EN_AGREEMENT_SENT_START17");
-			langTool.disableRule("EN_AGREEMENT_SENT_START18");
-			langTool.disableRule("EN_AGREEMENT_SENT_START19");
-			langTool.disableRule("EN_AGREEMENT_SENT_START20");
-
+			// Run LanguageTool check (now only spelling rules are active)
 			List<RuleMatch> matches = langTool.check(actualText);
+			LOGGER.info("LanguageTool returned " + matches.size() + " total matches for text: '" + 
+				(actualText.length() > 50 ? actualText.substring(0, 50) + "..." : actualText) + "'");
 
-			LOGGER.fine("LanguageTool found " + matches.size() + " potential issues for text: "
-					+ actualText.substring(0, Math.min(50, actualText.length())));
-
-			// If no matches found, log it for debugging
-			if (matches.isEmpty() && actualText.length() > 10) {
-				LOGGER.fine(
-						"No LanguageTool matches for: " + actualText.substring(0, Math.min(100, actualText.length())));
-			}
-
+			// Step 5: Process ONLY spelling rule matches
 			for (RuleMatch match : matches) {
 				String ruleId = match.getRule().getId().toUpperCase();
-				String ruleCategory = match.getRule().getCategory().getName().toUpperCase();
-				String ruleMessage = match.getMessage().toLowerCase();
-
-				// Check if this is a spelling-related rule
-				// LanguageTool spelling rules can have various IDs:
-				// - MORFOLOGIK_RULE_* (most common)
-				// - HUNSPELL_RULE
-				// - SPELLING_RULE
-				// - Rules in "Possible Typo" category
-				boolean isSpellingError = ruleId.contains("SPELL") || ruleId.contains("MORFOLOGIK")
-						|| ruleId.contains("HUNSPELL") || ruleId.contains("TYPO") || ruleId.contains("MISSPELLING")
-						|| ruleCategory.contains("POSSIBLE TYPO") || ruleCategory.contains("SPELLING")
-						|| ruleCategory.contains("TYPO") || ruleMessage.contains("spell")
-						|| ruleMessage.contains("typo") || ruleMessage.contains("misspelling")
-						|| ruleMessage.contains("did you mean");
-
-				// Also check if the match has suggestions (spelling errors usually have
-				// suggestions)
-				boolean hasSuggestions = !match.getSuggestedReplacements().isEmpty();
-
-				if (isSpellingError || (hasSuggestions && match.getSuggestedReplacements().size() > 0)) {
-					String context = actualText.substring(match.getFromPos(), match.getToPos());
-					String suggestion = match.getSuggestedReplacements().isEmpty() ? "No suggestions available"
-							: String.join(", ", match.getSuggestedReplacements());
-
-					// Create a more detailed message
-					String detailedMessage = match.getMessage() + " (Rule: " + match.getRule().getId() + ")";
-
-					issues.add(new GrammarIssue(context, suggestion, detailedMessage, elementType, actualText));
-					LOGGER.warning("Spelling error found in " + elementType + ": '" + context + "' -> " + suggestion
-							+ " (Rule: " + match.getRule().getId() + ", Category: "
-							+ match.getRule().getCategory().getName() + ")");
-				} else {
-					LOGGER.fine("Skipping non-spelling rule: " + match.getRule().getId() + " ("
-							+ match.getRule().getCategory().getName() + ") - Message: " + match.getMessage());
+				
+				// CRITICAL: Only accept MORFOLOGIK or HUNSPELL rules (actual spelling checkers)
+				// Reject anything else that might have slipped through
+				if (!ruleId.contains("MORFOLOGIK") && !ruleId.contains("HUNSPELL")) {
+					LOGGER.warning("Rejecting non-spelling rule: " + ruleId + " (this should not happen if rules were disabled correctly)");
+					continue;
 				}
+				
+				LOGGER.fine("Processing spelling rule match: " + ruleId);
+				
+				// Get the matched text
+				String matchedText = actualText.substring(
+						Math.max(0, match.getFromPos()), 
+						Math.min(actualText.length(), match.getToPos())).trim();
+				
+				// Step 6: Validate matched text is a real word
+				// - Must be at least 3 characters
+				// - Must contain letters (not just numbers/punctuation)
+				// - Must be a single word (spelling errors are word-level, not phrase-level)
+				if (matchedText.length() < 3) {
+					LOGGER.fine("Ignoring short word: '" + matchedText + "' (length: " + matchedText.length() + ")");
+					continue;
+				}
+				
+				if (!matchedText.matches(".*[A-Za-z].*")) {
+					LOGGER.fine("Ignoring non-word text: '" + matchedText + "'");
+					continue;
+				}
+				
+				// CRITICAL: Spelling errors are word-level, not phrase-level
+				// If the match spans multiple words (contains spaces), it's likely a grammar issue, not spelling
+				if (matchedText.contains(" ") || matchedText.split("\\s+").length > 1) {
+					LOGGER.fine("Ignoring multi-word match (likely grammar, not spelling): '" + matchedText + "'");
+					continue;
+				}
+				
+				// Must have suggestions (spelling errors always have correction suggestions)
+				if (match.getSuggestedReplacements().isEmpty()) {
+					LOGGER.warning("Spelling rule match has no suggestions - this is unusual: '" + matchedText + "' (rule: " + ruleId + ")");
+					continue;
+				}
+				
+				// Extract the word from the match (remove any trailing punctuation)
+				String word = matchedText.replaceAll("[^A-Za-z0-9]+$", "").replaceAll("^[^A-Za-z0-9]+", "");
+				if (word.length() < 3) {
+					LOGGER.fine("Ignoring word after punctuation removal: '" + word + "' (original: '" + matchedText + "')");
+					continue;
+				}
+				
+				LOGGER.fine("Valid spelling error candidate: '" + word + "' with suggestions: " + match.getSuggestedReplacements());
+				
+				// This is a valid spelling error!
+				String suggestion = String.join(", ", match.getSuggestedReplacements());
+
+				// Include surrounding context for better identification
+				int contextStart = Math.max(0, match.getFromPos() - 20);
+				int contextEnd = Math.min(actualText.length(), match.getToPos() + 20);
+				String surroundingContext = actualText.substring(contextStart, contextEnd);
+				
+				String detailedMessage = "Spelling error: '" + word + "' should be '" + suggestion + "'";
+				
+				issues.add(new GrammarIssue(word, suggestion, detailedMessage, "PAGE CONTENT", surroundingContext));
+				LOGGER.info("✓ Spelling error: '" + word + "' -> " + suggestion);
 			}
 
-			if (matches.size() > 0 && issues.isEmpty()) {
-				LOGGER.info("Found " + matches.size()
-						+ " LanguageTool matches but none were identified as spelling errors for: "
-						+ actualText.substring(0, Math.min(50, actualText.length())));
-				// Log first few rule IDs for debugging
-				for (int i = 0; i < Math.min(3, matches.size()); i++) {
-					RuleMatch m = matches.get(i);
-					LOGGER.info("  Rule " + (i + 1) + ": " + m.getRule().getId() + " - "
-							+ m.getRule().getCategory().getName() + " - " + m.getMessage());
-				}
+			if (issues.size() > 0) {
+				LOGGER.info("Found " + issues.size() + " spelling error(s) in chunk");
 			}
 		} catch (Throwable e) {
-			LOGGER.warning("Spelling check failed for text: " + text + ". Error: " + e.getMessage());
+			LOGGER.warning("Spelling check failed: " + e.getMessage());
+			e.printStackTrace();
 		}
 		return issues;
 	}
@@ -2847,7 +4230,7 @@ public class StyleGuide_ValidatorQA {
 			for (Map.Entry<String, List<OtherElement>> entry : groupedElements.entrySet()) {
 				String tagName = entry.getKey();
 				List<OtherElement> elements = entry.getValue();
-				sb.append("<details open>\n");
+				sb.append("<details>\n");
 				sb.append("<summary>").append(tagName.toUpperCase()).append(" (").append(elements.size())
 						.append(")</summary>\n");
 				sb.append("<div>\n");
@@ -2872,8 +4255,11 @@ public class StyleGuide_ValidatorQA {
 						sb.append("</div>\n");
 					}
 					sb.append("<div class=\"details\">\n");
-					sb.append("<div><strong>Tag:</strong> <span>").append(escapeHtml(el.tagName))
-							.append("</span></div>\n");
+					// Skip Tag display for li and accordion elements
+					if (!el.tagName.equals("li") && !el.tagName.equals("accordion")) {
+						sb.append("<div><strong>Tag:</strong> <span>").append(escapeHtml(el.tagName))
+								.append("</span></div>\n");
+					}
 
 					// Display attributes based on tag type
 					// Track if there's a URL to display below
@@ -3011,9 +4397,94 @@ public class StyleGuide_ValidatorQA {
 							sb.append("<div><strong>Max:</strong> <span>").append(escapeHtml(el.attr2))
 									.append("</span></div>\n");
 						}
+					} else if (el.tagName.equals("accordion")) {
+						// Display CSS properties for accordion elements
+						if (!el.attr1.isEmpty() && !el.attr1.equals("Not available")) {
+							sb.append("<div><strong>Font Family:</strong> <span>")
+									.append(escapeHtml(el.attr1)).append("</span></div>\n");
+						}
+						if (!el.attr2.isEmpty() && !el.attr2.equals("Not available")) {
+							sb.append("<div><strong>Font Size:</strong> <span>")
+									.append(escapeHtml(el.attr2)).append("</span></div>\n");
+						}
+						if (!el.attr3.isEmpty() && !el.attr3.equals("Not available")) {
+							String fontWeightDisplay = escapeHtml(el.attr3);
+							String fontWeightName = FONT_WEIGHT_NAMES.getOrDefault(el.attr3, "");
+							if (!fontWeightName.isEmpty()) {
+								fontWeightDisplay += " (" + fontWeightName + ")";
+							}
+							sb.append("<div><strong>Font Weight:</strong> <span>")
+									.append(fontWeightDisplay).append("</span></div>\n");
+						}
+						if (!el.attr4.isEmpty() && !el.attr4.equals("Not available")) {
+							sb.append("<div><strong>Line Height:</strong> <span>")
+									.append(escapeHtml(el.attr4)).append("</span></div>\n");
+						}
+						if (!el.attr5.isEmpty() && !el.attr5.equals("Not available")) {
+							sb.append("<div><strong>Letter Spacing:</strong> <span>")
+									.append(escapeHtml(el.attr5)).append("</span></div>\n");
+						}
+						if (!el.attr6.isEmpty() && !el.attr6.equals("Not available")) {
+							sb.append("<div><strong>Background Color:</strong> <span><span class=\"color-box button-color-box\" style=\"background: ")
+									.append(escapeHtml(cssColorToHex(el.attr6))).append(";\"></span> ")
+									.append(escapeHtml(cssColorToHex(el.attr6))).append("</span></div>\n");
+						}
+						if (!el.attr7.isEmpty() && !el.attr7.equals("Not available")) {
+							sb.append("<div><strong>Text Color:</strong> <span><span class=\"color-box button-color-box\" style=\"background: ")
+									.append(escapeHtml(cssColorToHex(el.attr7))).append(";\"></span> ")
+									.append(escapeHtml(cssColorToHex(el.attr7))).append("</span></div>\n");
+						}
+						if (!el.attr8.isEmpty() && !el.attr8.equals("Not available")) {
+							sb.append("<div class=\"url-box\"><strong>URL:</strong> <span><a href=\"")
+									.append(escapeHtml(el.attr8)).append("\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"link-url\">")
+									.append(escapeHtml(el.attr8)).append("</a></span></div>\n");
+						}
+					} else if (el.tagName.equals("li")) {
+						// Display CSS properties for LI elements
+						if (!el.attr1.isEmpty() && !el.attr1.equals("Not available")) {
+							sb.append("<div><strong>Font Family:</strong> <span>")
+									.append(escapeHtml(el.attr1)).append("</span></div>\n");
+						}
+						if (!el.attr2.isEmpty() && !el.attr2.equals("Not available")) {
+							sb.append("<div><strong>Font Size:</strong> <span>")
+									.append(escapeHtml(el.attr2)).append("</span></div>\n");
+						}
+						if (!el.attr3.isEmpty() && !el.attr3.equals("Not available")) {
+							String fontWeightDisplay = escapeHtml(el.attr3);
+							String fontWeightName = FONT_WEIGHT_NAMES.getOrDefault(el.attr3, "");
+							if (!fontWeightName.isEmpty()) {
+								fontWeightDisplay += " (" + fontWeightName + ")";
+							}
+							sb.append("<div><strong>Font Weight:</strong> <span>")
+									.append(fontWeightDisplay).append("</span></div>\n");
+						}
+						if (!el.attr4.isEmpty() && !el.attr4.equals("Not available")) {
+							sb.append("<div><strong>Line Height:</strong> <span>")
+									.append(escapeHtml(el.attr4)).append("</span></div>\n");
+						}
+						if (!el.attr5.isEmpty() && !el.attr5.equals("Not available")) {
+							sb.append("<div><strong>Letter Spacing:</strong> <span>")
+									.append(escapeHtml(el.attr5)).append("</span></div>\n");
+						}
+						if (!el.attr6.isEmpty() && !el.attr6.equals("Not available")) {
+							sb.append("<div><strong>Background Color:</strong> <span><span class=\"color-box button-color-box\" style=\"background: ")
+									.append(escapeHtml(cssColorToHex(el.attr6))).append(";\"></span> ")
+									.append(escapeHtml(cssColorToHex(el.attr6))).append("</span></div>\n");
+						}
+						if (!el.attr7.isEmpty() && !el.attr7.equals("Not available")) {
+							sb.append("<div><strong>Text Color:</strong> <span><span class=\"color-box button-color-box\" style=\"background: ")
+									.append(escapeHtml(cssColorToHex(el.attr7))).append(";\"></span> ")
+									.append(escapeHtml(cssColorToHex(el.attr7))).append("</span></div>\n");
+						}
 					}
 
 					sb.append("</div>\n");
+					// Move URL box outside details div for LI elements to be separate below other tabs
+					if (el.tagName.equals("li") && !el.attr8.isEmpty() && !el.attr8.equals("Not available")) {
+						sb.append("<div class=\"url-box\" style=\"width: 100%;\"><strong>URL:</strong> <span><a href=\"")
+								.append(escapeHtml(el.attr8)).append("\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"link-url\">")
+								.append(escapeHtml(el.attr8)).append("</a></span></div>\n");
+					}
 					if (hasUrl && !urlValue.isEmpty()) {
 						sb.append("<div class=\"url-box\"><strong>Source:</strong> <span><a href=\"")
 								.append(escapeHtml(urlValue)).append("\" target=\"_blank\" class=\"link-url\">")
@@ -4225,6 +5696,56 @@ public class StyleGuide_ValidatorQA {
 			return "#000000";
 		}
 		return "#000000";
+	}
+
+	/**
+	 * Get hover background color for an element if it has a hover state
+	 * Returns the hover background color, or the default background color if no hover state exists
+	 */
+	private String getBackgroundColorWithHover(WebElement element, String defaultBackgroundColor) {
+		try {
+			// Try to get hover background color using JavaScript
+			JavascriptExecutor js = (JavascriptExecutor) driver;
+			
+			// Scroll element into view first
+			js.executeScript("arguments[0].scrollIntoView({behavior: 'auto', block: 'center'});", element);
+			Thread.sleep(100); // Small delay to ensure scroll completes
+			
+			// Get the default background color first
+			String defaultBg = element.getCssValue("background-color");
+			if (defaultBg == null || defaultBg.isEmpty() || defaultBg.equals("rgba(0, 0, 0, 0)")) {
+				defaultBg = defaultBackgroundColor;
+			}
+			
+			// Try to simulate hover and get background color
+			Actions actions = new Actions(driver);
+			actions.moveToElement(element).perform();
+			Thread.sleep(100); // Small delay to allow hover state to apply
+			
+			String hoverBg = element.getCssValue("background-color");
+			
+			// If hover background color is different and not transparent, use it
+			if (hoverBg != null && !hoverBg.isEmpty() && !hoverBg.equals("rgba(0, 0, 0, 0)") 
+					&& !hoverBg.equals(defaultBg)) {
+				return hoverBg;
+			}
+			
+			// Also check for :hover pseudo-class using JavaScript
+			String hoverColor = (String) js.executeScript(
+				"var style = window.getComputedStyle(arguments[0], ':hover');" +
+				"return style.backgroundColor;", element);
+			
+			if (hoverColor != null && !hoverColor.isEmpty() && !hoverColor.equals("rgba(0, 0, 0, 0)")
+					&& !hoverColor.equals(defaultBg)) {
+				return hoverColor;
+			}
+			
+			// Return default if no hover state found
+			return defaultBg != null && !defaultBg.isEmpty() ? defaultBg : defaultBackgroundColor;
+		} catch (Exception e) {
+			LOGGER.warning("Error getting hover background color: " + e.getMessage());
+			return defaultBackgroundColor;
+		}
 	}
 
 	static class WebsiteData {
